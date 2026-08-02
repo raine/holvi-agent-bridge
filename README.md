@@ -36,12 +36,18 @@ uses Bun and the dependencies in `package.json`.
 
 ## Getting started
 
-### Install the bridge
+### Install the `holvi` CLI
 
-Build and install the native binary:
+Install the latest release with the installation script:
 
 ```sh
-cargo install --path . --locked
+curl -fsSL https://raw.githubusercontent.com/raine/holvi-agent-bridge/main/scripts/install | bash
+```
+
+Or install with Homebrew:
+
+```sh
+brew install raine/holvi-agent-bridge/holvi
 ```
 
 ### Teach a coding agent
@@ -102,23 +108,21 @@ holvi install \
   --yes
 ```
 
-The installer writes the private configuration, installs the Chrome native host
-manifest, and extracts the embedded extension into the application support
-directory. Its JSON output contains the unpacked extension path. Open
-`chrome://extensions`, enable Developer mode, choose Load unpacked, and select
-that directory.
+The `holvi install` command prepares both parts of the bridge. Complete the
+browser setup using the paths in its JSON output:
 
-### Verify the connection
+1. Find `extensionPath` in the output. This is the unpacked extension directory
+   containing `manifest.json`.
+2. Open `chrome://extensions` in Google Chrome.
+3. Enable **Developer mode**.
+4. Choose **Load unpacked** and select the exact `extensionPath` directory.
+5. Confirm that Chrome displays extension ID
+   `oeedcemphbobfehfmcllmjhhhjgahgeb`.
+6. Reload the signed-in Holvi group tab.
 
-Confirm that Chrome shows this extension ID:
-
-```text
-oeedcemphbobfehfmcllmjhhhjgahgeb
-```
-
-The native host accepts connections from that exact extension ID. Reload the
-signed-in Holvi group tab after loading the extension, then verify the complete
-path:
+The command also registers the native host using the executable that ran
+`holvi install`. The extension and native host are ready when `holvi doctor`
+succeeds:
 
 ```sh
 holvi doctor
