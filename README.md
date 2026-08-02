@@ -235,6 +235,8 @@ details, field changes, continuation URLs, and unprojected response fields.
 | ----------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------- |
 | [`install`](#holvi-install)                                 | none                                                       | Configure the account and register the extension  |
 | [`skill`](#holvi-skill)                                     | none                                                       | Print or install the coding-agent skill           |
+| [`config edit`](#holvi-config-edit)                          | none                                                       | Open the private config in the user editor         |
+| [`config path`](#holvi-config-path)                          | none                                                       | Print the private config path                      |
 | [`capabilities`](#holvi-capabilities)                       | none                                                       | Show enabled capabilities and operations          |
 | [`doctor`](#holvi-doctor)                                   | any configured capability                                  | Verify the Chrome connection and an API surface   |
 | [`transactions`](#holvi-transactions)                       | `transactions.read`                                        | List payment-account transactions                 |
@@ -307,6 +309,32 @@ The user-level destinations are:
 Installation creates missing skill directories and replaces the destination with
 the skill embedded in the running `holvi` executable, so repeated installs are
 idempotent and refresh the instructions.
+
+### `holvi config edit`
+
+Opens the private configuration file in the editor selected by `VISUAL`, then
+`EDITOR`, with `vi` as the fallback. Editor values can include command-line
+arguments, such as `VISUAL="code --wait"`. The command passes the resolved config
+path to the editor and reports a failure when the editor exits unsuccessfully.
+
+```sh
+holvi config edit
+```
+
+Config editing derives the path independently of config contents, which allows
+the editor to repair an invalid configuration file.
+
+### `holvi config path`
+
+Prints the private configuration file path. Path resolution works before the file
+exists and is independent of its contents.
+
+```sh
+holvi config path
+```
+
+Both config commands honor `HOLVI_AGENT_BRIDGE_CONFIG`. Otherwise they use the
+platform path described in [Local files](#local-files).
 
 ### `holvi capabilities`
 

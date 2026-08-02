@@ -1,6 +1,9 @@
+use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -12,15 +15,16 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 use crate::capabilities::enabled_actions;
-use crate::config::{load_config, resolve_receipt_file, socket_path, validate_uuid};
+use crate::config::{config_path, load_config, resolve_receipt_file, socket_path, validate_uuid};
 use crate::install::{InstallOptions, install_bridge};
 use crate::protocol::sign_request;
 use crate::skill::{self, CodingAgentArg};
 
 const HELP_AFTER: &str =
-    "Every command requires its configured capability. Upload is a dry check unless
---yes is present. The configured signed-in Holvi group tab must remain open in
-Chrome. Attachment paths are restricted by the private local config.";
+    "Commands that contact Holvi require their configured capability. Upload is a dry
+check unless --yes is present. The configured signed-in Holvi group tab must
+remain open in Chrome. Attachment paths are restricted by the private local
+config.";
 
 #[derive(Parser)]
 #[command(
@@ -39,6 +43,11 @@ enum Command {
     Install(InstallArgs),
     /// Print or install the coding-agent skill
     Skill(SkillCommand),
+    /// Inspect or edit the private configuration file
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Show enabled capabilities and operations
     Capabilities,
     /// Verify the Chrome connection and an API surface
@@ -59,6 +68,14 @@ enum Command {
         #[command(subcommand)]
         command: AuditCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Open the configuration file in $VISUAL or $EDITOR
+    Edit,
+    /// Print the configuration file path
+    Path,
 }
 
 #[derive(Subcommand)]
@@ -186,10 +203,18 @@ pub async fn run() -> Result<()> {
         }
         return Ok(());
     }
+    if let Command::Config { command } = command {
+        let path = config_path()?;
+        match command {
+            ConfigCommand::Edit => edit_config(&path)?,
+            ConfigCommand::Path => println!("{}", path.display()),
+        }
+        return Ok(());
+    }
 
     let (config, _) = load_config()?;
     match command {
-        Command::Install(_) | Command::Skill(_) => unreachable!(),
+        Command::Install(_) | Command::Skill(_) | Command::Config { .. } => unreachable!(),
         Command::Capabilities => {
             println!(
                 "{}",
@@ -305,6 +330,33 @@ pub async fn run() -> Result<()> {
             }
         },
     }
+    Ok(())
+}
+
+fn edit_config(path: &Path) -> Result<()> {
+    let (source, editor) = [
+        ("VISUAL", env::var_os("VISUAL")),
+        ("EDITOR", env::var_os("EDITOR")),
+    ]
+    .into_iter()
+    .find_map(|(source, value)| {
+        value
+            .filter(|value| !value.is_empty())
+            .map(|value| (source, value))
+    })
+    .unwrap_or(("default editor", OsString::from("vi")));
+    let status = ProcessCommand::new("sh")
+        .arg("-c")
+        .arg(r#"eval "$1 \"\$2\"""#)
+        .arg("holvi config edit")
+        .arg(editor)
+        .arg(path)
+        .status()
+        .with_context(|| format!("Unable to launch editor command from {source}."))?;
+    ensure!(
+        status.success(),
+        "Editor command from {source} failed with {status}."
+    );
     Ok(())
 }
 
@@ -448,6 +500,25 @@ fn print_transactions(transactions: TransactionResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_config_commands() {
+        let edit = Cli::try_parse_from(["holvi", "config", "edit"]).unwrap();
+        assert!(matches!(
+            edit.command,
+            Some(Command::Config {
+                command: ConfigCommand::Edit
+            })
+        ));
+
+        let path = Cli::try_parse_from(["holvi", "config", "path"]).unwrap();
+        assert!(matches!(
+            path.command,
+            Some(Command::Config {
+                command: ConfigCommand::Path
+            })
+        ));
+    }
 
     #[test]
     fn validates_calendar_dates() {
