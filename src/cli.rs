@@ -15,6 +15,7 @@ use crate::capabilities::enabled_actions;
 use crate::config::{load_config, resolve_receipt_file, socket_path, validate_uuid};
 use crate::install::{InstallOptions, install_bridge};
 use crate::protocol::sign_request;
+use crate::skill::{self, CodingAgentArg};
 
 const HELP_AFTER: &str =
     "Every command requires its configured capability. Upload is a dry check unless
@@ -31,6 +32,8 @@ pub struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Install(InstallArgs),
+    /// Print or install the coding-agent skill
+    Skill(SkillCommand),
     Capabilities,
     Doctor,
     Transactions(TransactionArgs),
@@ -59,6 +62,25 @@ enum AuditCommand {
         #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u8).range(1..=25))]
         limit: u8,
     },
+}
+
+#[derive(Args)]
+struct SkillCommand {
+    #[command(subcommand)]
+    command: Option<SkillSubcommand>,
+}
+
+#[derive(Subcommand)]
+enum SkillSubcommand {
+    /// Install the holvi skill for coding agents
+    Install(SkillInstallArgs),
+}
+
+#[derive(Args)]
+struct SkillInstallArgs {
+    /// Target a coding agent (default: all detected)
+    #[arg(long = "agent", value_enum)]
+    agent: Vec<CodingAgentArg>,
 }
 
 #[derive(Args)]
@@ -141,10 +163,17 @@ pub async fn run() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
     }
+    if let Command::Skill(args) = command {
+        match args.command {
+            None => skill::print(),
+            Some(SkillSubcommand::Install(args)) => skill::install(&args.agent)?,
+        }
+        return Ok(());
+    }
 
     let (config, _) = load_config()?;
     match command {
-        Command::Install(_) => unreachable!(),
+        Command::Install(_) | Command::Skill(_) => unreachable!(),
         Command::Capabilities => {
             println!(
                 "{}",
@@ -438,6 +467,31 @@ mod tests {
             })
         ));
         assert!(Cli::try_parse_from(["holvi", "audit", "list", "--limit", "26"]).is_err());
+    }
+
+    #[test]
+    fn parses_skill_print_and_install_targets() {
+        let print = Cli::try_parse_from(["holvi", "skill"]).unwrap();
+        assert!(matches!(
+            print.command,
+            Some(Command::Skill(SkillCommand { command: None }))
+        ));
+
+        let install = Cli::try_parse_from([
+            "holvi", "skill", "install", "--agent", "claude", "--agent", "codex",
+        ])
+        .unwrap();
+        let Some(Command::Skill(SkillCommand {
+            command: Some(SkillSubcommand::Install(args)),
+        })) = install.command
+        else {
+            panic!()
+        };
+        assert_eq!(
+            args.agent,
+            vec![CodingAgentArg::Claude, CodingAgentArg::Codex]
+        );
+        assert!(Cli::try_parse_from(["holvi", "skill", "install", "--agent", "unknown"]).is_err());
     }
 
     #[test]

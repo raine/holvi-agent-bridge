@@ -11,25 +11,17 @@ can be approved independently.
 Receipt handling is the first workflow built on the bridge. It is not the
 boundary of the project.
 
-## Capabilities
+## Features
 
-An installation explicitly enables capabilities in its private config.
-
-| Capability          | Operations                                                           |
-| ------------------- | -------------------------------------------------------------------- |
-| `transactions.read` | Check the connection, list transactions, and inspect one transaction |
-| `attachments.write` | Attach a local file after preflight checks and verify the result     |
-| `bookkeeping.read`  | Inspect accounting details, categories, and category suggestions     |
-| `audit.read`        | Inspect a bounded page of recent pool activity                       |
-
-`attachments.write` operations also require `transactions.read` because the
-bridge checks attachment state immediately before and after a write.
-
-Inspect the capabilities and operations enabled on a machine:
-
-```sh
-holvi capabilities
-```
+- List and filter transactions from one configured Holvi payment account.
+- Inspect debt and bookkeeping details without exposing unprojected API data.
+- List bookkeeping categories and category suggestions for a debt.
+- Review a bounded, newest-first page of recent pool activity.
+- Dry-run receipt attachments, require explicit write confirmation, and verify
+  attachment state before and after upload.
+- Keep Holvi credentials in Chrome while enforcing capabilities in both the
+  native host and extension.
+- Install an agent-facing skill for Claude Code, OpenCode, or Codex.
 
 ## Requirements
 
@@ -46,13 +38,42 @@ Chrome extension. It has no Node or Bun runtime dependency.
 Building from source requires Rust 1.85 or later. Extension development also
 uses Bun and the dependencies in `package.json`.
 
-## Install
+## Getting started
+
+### Install the bridge
 
 Build and install the native binary:
 
 ```sh
 cargo install --path . --locked
 ```
+
+### Teach a coding agent
+
+Print the agent-facing CLI primer to standard output:
+
+```sh
+holvi skill
+```
+
+Install it into every detected coding-agent skill directory:
+
+```sh
+holvi skill install
+```
+
+Claude Code, OpenCode, and Codex are supported. Choose one or more explicit
+targets when automatic detection is not appropriate:
+
+```sh
+holvi skill install --agent claude --agent codex
+```
+
+The installed skill teaches the agent how to inspect capabilities, distinguish
+payment and debt UUIDs, use bounded read operations, dry-run receipt uploads,
+and preserve the bridge's security boundary.
+
+### Configure Holvi
 
 Sign in to Holvi in Chrome. Open the company group and its payment account
 transaction feed. Copy:
@@ -91,6 +112,8 @@ directory. Its JSON output contains the unpacked extension path. Open
 `chrome://extensions`, enable Developer mode, choose Load unpacked, and select
 that directory.
 
+### Verify the connection
+
 Confirm that Chrome shows this extension ID:
 
 ```text
@@ -103,6 +126,26 @@ path:
 
 ```sh
 holvi doctor
+```
+
+## Capabilities
+
+An installation explicitly enables capabilities in its private config.
+
+| Capability          | Operations                                                           |
+| ------------------- | -------------------------------------------------------------------- |
+| `transactions.read` | Check the connection, list transactions, and inspect one transaction |
+| `attachments.write` | Attach a local file after preflight checks and verify the result     |
+| `bookkeeping.read`  | Inspect accounting details, categories, and category suggestions     |
+| `audit.read`        | Inspect a bounded page of recent pool activity                       |
+
+`attachments.write` operations also require `transactions.read` because the
+bridge checks attachment state immediately before and after a write.
+
+Inspect the capabilities and operations enabled on a machine:
+
+```sh
+holvi capabilities
 ```
 
 ## Transaction and receipt workflow
@@ -191,6 +234,7 @@ details, field changes, continuation URLs, and unprojected response fields.
 | Command                                                     | Capability                                                 | Description                                       |
 | ----------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------- |
 | [`install`](#holvi-install)                                 | none                                                       | Configure the account and register the extension  |
+| [`skill`](#holvi-skill)                                     | none                                                       | Print or install the coding-agent skill           |
 | [`capabilities`](#holvi-capabilities)                       | none                                                       | Show enabled capabilities and operations          |
 | [`doctor`](#holvi-doctor)                                   | any configured capability                                  | Verify the Chrome connection and an API surface   |
 | [`transactions`](#holvi-transactions)                       | `transactions.read`                                        | List payment-account transactions                 |
@@ -229,6 +273,38 @@ holvi install \
 `attachments.write` requires at least one receipt root. The command prints the
 config path, stable extension ID, unpacked extension path, and native host
 manifest path as JSON.
+
+### `holvi skill`
+
+Prints the embedded agent-facing Holvi CLI primer. This form does not read the
+bridge config or connect to Chrome.
+
+```sh
+holvi skill
+```
+
+Install the primer as `SKILL.md` for detected coding agents:
+
+```sh
+holvi skill install [--agent AGENT]...
+```
+
+`--agent` accepts `claude`, `opencode`, or `codex` and is repeatable. Without an
+explicit target, the command detects user-level agent directories and workspace
+markers. It reports an error when no supported agent is detected. Explicit
+targets install without requiring prior detection.
+
+The user-level destinations are:
+
+```text
+~/.claude/skills/holvi/SKILL.md
+~/.config/opencode/skills/holvi/SKILL.md
+~/.codex/skills/holvi/SKILL.md
+```
+
+Installation creates missing skill directories and replaces the destination with
+the skill embedded in the running `holvi` executable, so repeated installs are
+idempotent and refresh the instructions.
 
 ### `holvi capabilities`
 

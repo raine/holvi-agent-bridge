@@ -4,6 +4,7 @@ mod config;
 mod host;
 mod install;
 mod protocol;
+mod skill;
 
 use anyhow::Result;
 
