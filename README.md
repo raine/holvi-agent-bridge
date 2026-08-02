@@ -1,12 +1,11 @@
 # Holvi Agent Bridge
 
-`holvi-agent-bridge` gives local agents capability-scoped access to Holvi
-through an existing signed-in Chrome session.
+`holvi-agent-bridge` lets local agents use selected Holvi features through a
+signed-in browser session.
 
-Chrome acts as the authentication vault. The agent uses a native `holvi` CLI and
-does not need to navigate through the Holvi site. The bridge exposes named
-operations instead of arbitrary authenticated HTTP requests, so each Holvi area
-can be approved independently.
+The Holvi session stays in the browser. Agents work through the native `holvi`
+CLI instead of navigating the site. Each command performs a specific operation,
+so you can choose which parts of Holvi the agent may use.
 
 ## How it works
 
@@ -36,15 +35,15 @@ you enable.
 
 ## Features
 
-- List and filter transactions from one configured Holvi payment account.
-- Inspect debt and bookkeeping details without exposing unprojected API data.
-- List bookkeeping categories and category suggestions for a debt.
-- Review a bounded, newest-first page of recent pool activity.
-- Dry-run receipt attachments, require explicit write confirmation, and verify
-  attachment state before and after upload.
-- Keep Holvi credentials in Chrome while enforcing capabilities in both the
-  native host and extension.
-- Install an agent-facing skill for Claude Code, OpenCode, or Codex.
+- List and filter transactions for one Holvi payment account.
+- View debt and bookkeeping details without exposing full API responses.
+- List bookkeeping categories and suggestions for a debt.
+- View a limited page of recent account activity, newest first.
+- Preview receipt attachments, require confirmation before upload, and check the
+  attachment count before and after the upload.
+- Keep Holvi credentials in the browser and grant access one capability at a
+  time.
+- Install a skill for Claude Code, OpenCode, or Codex.
 
 ## Requirements
 
@@ -95,14 +94,14 @@ targets when automatic detection is not appropriate:
 holvi skill install --agent claude --agent codex
 ```
 
-The installed skill teaches the agent how to inspect capabilities, distinguish
-payment and debt UUIDs, use bounded read operations, dry-run receipt uploads,
-and preserve the bridge's security boundary.
+The installed skill explains how to check capabilities, tell payment and debt
+UUIDs apart, keep read operations within their limits, and preview receipt
+uploads before making changes.
 
 ### Configure Holvi
 
-Sign in to Holvi in Chrome. Open the company group and its payment account
-transaction feed. Copy:
+Sign in to Holvi in Chrome, then open the company group and its payment account
+transaction feed. Copy these values:
 
 - the full group URL, such as
   `https://account.app.holvi.com/group/AbC123+example-company/`
@@ -152,14 +151,14 @@ holvi doctor
 
 ## Capabilities
 
-An installation explicitly enables capabilities in its private config.
+The private config lists the capabilities available to the agent.
 
 | Capability          | Operations                                                           |
 | ------------------- | -------------------------------------------------------------------- |
 | `transactions.read` | Check the connection, list transactions, and inspect one transaction |
 | `attachments.write` | Attach a local file after preflight checks and verify the result     |
 | `bookkeeping.read`  | Inspect accounting details, categories, and category suggestions     |
-| `audit.read`        | Inspect a bounded page of recent pool activity                       |
+| `audit.read`        | Inspect up to 25 recent pool activity entries                         |
 
 `attachments.write` operations also require `transactions.read` because the
 bridge checks attachment state immediately before and after a write.
@@ -185,17 +184,18 @@ holvi transactions --from 2026-07-01 --to 2026-07-31 \
   --missing-attachments --json
 ```
 
-The JSON output keeps Holvi's payment UUID and direct-match debt UUID separate.
-Settled transactions normally have a debt UUID. Pending payments can have `null`
-until Holvi creates the debt record used for attachments.
+The JSON output reports Holvi's payment UUID and direct-match debt UUID as
+separate fields. Settled transactions normally have a debt UUID. Pending
+payments can have `null` until Holvi creates the debt record used for
+attachments.
 
 ```sh
 holvi preview \
   --debt '11111111-1111-4111-8111-111111111111'
 ```
 
-Run an upload without `--yes` first. This checks the transaction and local file
-without changing Holvi:
+Before uploading, run the command without `--yes`. It checks the transaction and
+local file without changing Holvi:
 
 ```sh
 holvi upload \
@@ -203,7 +203,7 @@ holvi upload \
   --file '/absolute/path/to/receipts/example.pdf'
 ```
 
-After verifying the dry-run output, perform the upload:
+Check the preview, then upload the file:
 
 ```sh
 holvi upload \
@@ -222,16 +222,16 @@ Enable `bookkeeping.read` or `audit.read` during installation to expose their
 commands. These capabilities cover the configured Holvi pool, while
 `transactions.read` remains restricted to the configured payment account.
 
-Inspect the authoritative accounting document and its active line items:
+View the accounting document and its active line items:
 
 ```sh
 holvi bookkeeping get \
   --debt '11111111-1111-4111-8111-111111111111'
 ```
 
-The result distinguishes unit prices from line totals and preserves Holvi's
-decimal strings without floating-point conversion. Inactive and non-line-item
-records are excluded and counted in `droppedItemCount`.
+The result keeps unit prices separate from line totals and leaves Holvi's decimal
+strings unchanged. It omits inactive records and records that are not line items,
+and reports their number in `droppedItemCount`.
 
 List category codes and request Holvi's ordered category suggestions for one
 debt:
@@ -248,8 +248,9 @@ Inspect up to 25 recent activity entries:
 holvi audit list --limit 25
 ```
 
-The audit result contains one bounded newest-first page. It omits polymorphic
-details, field changes, continuation URLs, and unprojected response fields.
+The audit command returns one page in newest-first order. It leaves out
+polymorphic details, field changes, continuation URLs, and other response fields
+that the command does not use.
 
 ## Command reference
 
@@ -273,10 +274,10 @@ details, field changes, continuation URLs, and unprojected response fields.
 
 ### `holvi install`
 
-Writes config version 2, installs the embedded extension files, and registers
-the Chrome Native Messaging host. Repeated `--capability` and `--receipt-root`
-options preserve their input order and remove duplicates. A valid existing HMAC
-secret is reused.
+Writes the private config, installs the bundled extension files, and registers
+the Chrome Native Messaging host. You can repeat `--capability` and
+`--receipt-root`. The command keeps their original order and removes duplicates.
+It also reuses an existing valid HMAC secret.
 
 ```sh
 holvi install \
@@ -296,35 +297,34 @@ holvi install \
 | `--receipt-root PATH`     | no       | Approved absolute attachment directory, repeatable  |
 | `--json`                  | no       | Print the installation result as JSON               |
 
-`attachments.write` requires at least one receipt root. The default completion
-report shows the config path, stable extension ID, unpacked extension path,
-native host manifest path, active-host restart status, and next steps. Installation
-sends a signed restart request to an idle native host, and the extension reconnects
-to the executable registered in the installed manifest. A busy host or a host
-without restart-control support produces `manualRequired` restart status. Reload the unpacked extension in
-`chrome://extensions` after every installation so Chrome activates its installed
-JavaScript artifacts. Use `--json` for the installation result as a
-machine-readable object.
+`attachments.write` requires at least one receipt root. The default report shows
+the config path, stable extension ID, unpacked extension path, native host
+manifest path, restart status, and next steps. Installation asks an idle native
+host to restart with a signed request. The extension then reconnects to the
+executable in the installed manifest. If the host is busy or does not support
+restart control, the report shows `manualRequired`. Reload the unpacked extension
+in `chrome://extensions` after each installation to activate the installed
+JavaScript. Use `--json` to get the installation result as a JSON object.
 
 ### `holvi skill`
 
-Prints the embedded agent-facing Holvi CLI primer. This form does not read the
-bridge config or connect to Chrome.
+Prints the built-in instructions for coding agents. This command does not read
+the bridge config or connect to Chrome.
 
 ```sh
 holvi skill
 ```
 
-Install the primer as `SKILL.md` for detected coding agents:
+Install the instructions as `SKILL.md` for any detected coding agents:
 
 ```sh
 holvi skill install [--agent AGENT]...
 ```
 
-`--agent` accepts `claude`, `opencode`, or `codex` and is repeatable. Without an
-explicit target, the command detects user-level agent directories and workspace
-markers. It reports an error when no supported agent is detected. Explicit
-targets install without requiring prior detection.
+`--agent` accepts `claude`, `opencode`, or `codex`, and you can pass it more than
+once. Without `--agent`, the command looks for user-level agent directories and
+workspace markers. It returns an error if it cannot find a supported agent. An
+explicit target does not need to be detected first.
 
 The user-level destinations are:
 
@@ -334,9 +334,9 @@ The user-level destinations are:
 ~/.codex/skills/holvi/SKILL.md
 ```
 
-Installation creates missing skill directories and replaces the destination with
-the skill embedded in the running `holvi` executable, so repeated installs are
-idempotent and refresh the instructions.
+Installation creates any missing skill directories and replaces `SKILL.md` with
+the copy built into the running `holvi` executable. Run the command again to
+refresh the instructions.
 
 ### `holvi config edit`
 
@@ -380,10 +380,9 @@ to Chrome or Holvi.
 
 ### `holvi doctor`
 
-Verifies config loading, Native Messaging, native protocol compatibility, host and
-extension build versions, the configured Holvi tab, session authentication,
-runtime account scope, capability scope, and one API probe selected from enabled
-capabilities.
+Checks the config, Native Messaging connection, protocol compatibility, host and
+extension build versions, open Holvi tab, session authentication, account scope,
+capabilities, and one API endpoint.
 
 ```sh
 holvi doctor [--json]
@@ -392,14 +391,14 @@ holvi doctor [--json]
 Probe priority is transactions, bookkeeping categories, then audit activity. A
 write-only capability set verifies authentication and reports that an API probe
 requires a read capability. The default report groups connection, account,
-capability, and probe status into aligned terminal sections. Use `--json` for the
-machine-readable result, including `probeAction`, account scope, and capability
+capability, and probe status into aligned terminal sections. Use `--json` to get
+the same result as JSON, including `probeAction`, account scope, and capability
 metadata.
 
 ### `holvi transactions`
 
 Lists payment-feed records from the configured payment account. The bridge reads
-all bounded API pages and applies date filtering locally.
+API pages up to the configured limits and applies date filtering locally.
 
 ```sh
 holvi transactions \
@@ -422,7 +421,7 @@ transaction available within the configured page and result limits. JSON keeps
 
 ### `holvi preview`
 
-Reads one authoritative debt record and prints the compact projection used by
+Reads one debt record directly from Holvi and prints the compact view used by
 the receipt workflow.
 
 ```sh
@@ -464,8 +463,8 @@ holvi bookkeeping <COMMAND>
 
 ### `holvi bookkeeping get`
 
-Reads the authoritative accounting document for a debt and prints a strict JSON
-projection.
+Reads the accounting document for a debt directly from Holvi and returns a fixed
+set of JSON fields.
 
 ```sh
 holvi bookkeeping get --debt UUID
@@ -495,9 +494,9 @@ Lists Holvi's ordered category suggestions for one debt.
 holvi bookkeeping suggestions --debt UUID
 ```
 
-The JSON result contains `debtUuid` and `categoryCodes`. Suggestion records are
-normalized to category codes, bounded to 100 entries, and reject unknown item
-shapes.
+The JSON result contains `debtUuid` and `categoryCodes`. The command converts
+suggestion records to category codes, returns at most 100, and rejects unknown
+item shapes.
 
 ### `holvi audit`
 
@@ -509,7 +508,7 @@ holvi audit <COMMAND>
 
 ### `holvi audit list`
 
-Lists one bounded page of recent activity for the configured pool.
+Lists up to 25 recent activity entries for the configured pool.
 
 ```sh
 holvi audit list [--limit LIMIT]
@@ -524,7 +523,7 @@ changes.
 ### Common command behavior
 
 - `-h` and `--help` print help for the selected command.
-- Successful machine-readable commands write formatted JSON to standard output.
+- Commands with JSON output write formatted JSON to standard output.
 - Human-readable transaction output uses a fixed-width table unless `--json` is
   present.
 - Validation, authorization, Chrome connection, timeout, and Holvi API errors go
@@ -534,38 +533,35 @@ changes.
 
 ## Security model
 
-**The Holvi session stays in Chrome.** The content script reads Holvi's JWT only
-when the extension service worker requests it. The token remains inside the
-extension and is never sent to the native host, CLI, terminal, config file, or
-attachment directory.
+The Holvi session stays in Chrome. The content script reads Holvi's JWT only when
+the extension asks for it. The token never leaves the extension. It is not sent
+to the native host, CLI, terminal, config file, or attachment directory.
 
-**The target account comes from private local config.** The native host supplies
-the configured group segment, API pool handle, payment account UUID, and enabled
-capabilities at runtime. The extension uses authentication only from a tab whose
-full group segment matches that config.
+The private config selects the account. At runtime, the native host sends the
+group segment, API pool handle, payment account UUID, and enabled capabilities
+to the extension. The extension accepts authentication only from a tab whose
+full group segment matches the config.
 
-**Capabilities are checked twice.** The native host maps every command to its
-required capabilities before sending data to Chrome. The extension checks the
-same boundary before calling Holvi. Unknown commands and capabilities fail
-closed.
+The native host checks each command against its required capabilities before
+sending it to Chrome. The extension checks again before calling Holvi. Unknown
+commands and capabilities are rejected.
 
-**The agent gets named operations, not an HTTP proxy.** API paths and methods
-live inside the extension and cannot be supplied by the CLI caller.
+Agents call named operations rather than arbitrary HTTP endpoints. API paths and
+methods live in the extension and cannot be supplied by the CLI caller.
 
-**Local attachment access is allowlisted.** Files must resolve inside a
-configured root. Absolute paths, canonical path containment, regular file type,
-media type, readability, and size checks prevent relative path and symlink
-escapes.
+The config lists the local directories available for attachments. Files must
+resolve inside one of these directories. The bridge checks that each path is
+absolute, stays inside the directory after canonicalization, points to a regular
+and readable file, has an accepted media type, and fits the size limit.
 
-**Local commands are authenticated.** The installer creates a random HMAC secret
-in a `0600` config file. CLI requests are signed, expire after 30 seconds, and
-carry replay-protected nonces. The native host listens on a user-owned `0600`
-Unix socket and accepts only the stable extension origin.
+The installer creates a random HMAC secret in a `0600` config file. CLI requests
+are signed, expire after 30 seconds, and include replay-protected nonces. The
+native host listens on a user-owned `0600` Unix socket and accepts only the
+configured extension origin.
 
-The bridge protects the boundary between Chrome, the local agent, the configured
-Holvi account, and explicitly approved local files. Processes running as the
-same operating-system user can already read that user's files and browser
-profile.
+These checks separate the browser, local agent, Holvi account, and approved local
+files. A process running as the same operating-system user can already read that
+user's files and browser profile.
 
 ## Local files
 
@@ -580,27 +576,28 @@ On macOS, files live at:
 On Linux, equivalent files live under the XDG config directory and Google Chrome
 native messaging directory.
 
-Config format version 2 remains compatible with existing installations. Running
-`holvi install` reuses a valid `0600` HMAC secret and updates account scope,
-capabilities, receipt roots, the embedded extension, and the native host
-manifest.
+`holvi install` updates existing installations in place. It reuses a valid `0600`
+HMAC secret and updates the account, capabilities, receipt roots, extension, and
+native host manifest.
 
 ## Native architecture
 
-One Rust executable serves two entry paths:
+One Rust executable has two entry points:
 
 - normal invocation provides the `holvi` CLI
 - Chrome invocation with the allowlisted extension origin runs the Native
   Messaging host
 
-The host owns the authenticated Unix socket, capability checks, nonce cache,
-request timeout, and Native Messaging framing. The host-ready handshake carries
-the native protocol and host build versions. The extension rejects incompatible
-protocols and reports its own build version through `holvi doctor`. A signed
-`host.restart` control request asks the extension to disconnect and reconnect its
-Native Messaging port. Uploads use 480 KiB chunks, SHA-256 end-to-end
-verification, a 25 MiB default limit, explicit confirmation, and
-read-before-write and read-after-write checks in the extension.
+The host handles the authenticated Unix socket, capability checks, nonce cache,
+request timeout, and Native Messaging frames. During the handshake, it sends its
+it sends its protocol and build versions. The extension rejects incompatible
+protocols and includes its build version in `holvi doctor` output. A signed
+`host.restart` request tells the extension to disconnect and reconnect its Native
+Messaging port.
+
+Uploads are split into 480 KiB chunks and checked end to end with SHA-256. The
+default size limit is 25 MiB. Uploads also require confirmation and attachment
+checks before and after the write.
 
 The compiled extension files live in `assets/extension` so `cargo install` and
 Nix packages can embed them. `src/extension` remains the TypeScript source of
@@ -627,7 +624,7 @@ when updating the bridge.
 
 ## Development
 
-Install extension dependencies and run the canonical check suite:
+Install the extension dependencies and run the full check suite:
 
 ```sh
 bun install --frozen-lockfile
