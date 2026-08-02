@@ -12,8 +12,11 @@ use super::native_messaging;
 use super::socket::LocalSocket;
 use super::{LocalRequest, SocketReply};
 use crate::config::BridgeConfig;
+use crate::protocol::{
+    HOST_READY_MESSAGE, RESULT_MESSAGE, TAB_READY_MESSAGE, TAB_UNAVAILABLE_MESSAGE,
+};
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CLOSED_ERROR: &str = "The Chrome connection to Holvi Agent Bridge closed.";
 const TIMEOUT_ERROR: &str =
     "Holvi Agent Bridge timed out. Inspect the transaction before retrying an upload.";
@@ -51,9 +54,9 @@ impl RuntimeState {
 
     fn native_message(&mut self, message: Value) {
         match message.get("type").and_then(Value::as_str) {
-            Some("tab_ready") => self.tab_ready = true,
-            Some("tab_unavailable") => self.tab_ready = false,
-            Some("result") => {
+            Some(TAB_READY_MESSAGE) => self.tab_ready = true,
+            Some(TAB_UNAVAILABLE_MESSAGE) => self.tab_ready = false,
+            Some(RESULT_MESSAGE) => {
                 let Some(id) = message.get("id").and_then(Value::as_str) else {
                     return;
                 };
@@ -127,7 +130,7 @@ pub async fn run(config: BridgeConfig, socket: LocalSocket) -> Result<()> {
         tokio::spawn(socket.accept(config.hmac_secret.clone(), local, socket_shutdown_rx));
 
     native
-        .send(json!({"type": "host_ready", "config": config.public()}))
+        .send(json!({"type": HOST_READY_MESSAGE, "config": config.public()}))
         .await
         .context("Chrome native output closed.")?;
 

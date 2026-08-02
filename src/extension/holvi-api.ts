@@ -10,6 +10,10 @@ import {
 import type { Auth, StaticBridgeConfig } from "./background-types.js";
 import { BridgeSession, validateUuid } from "./session.js";
 
+export const auditLimitMin = 1;
+export const auditLimitMax = 25;
+export const auditPageSize = 25;
+
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -200,15 +204,15 @@ export class HolviApi {
   ): Promise<Record<string, unknown>> {
     if (
       !Number.isSafeInteger(limit) ||
-      (limit as number) < 1 ||
-      (limit as number) > 25
+      (limit as number) < auditLimitMin ||
+      (limit as number) > auditLimitMax
     ) {
       throw new Error("Activity limit must be between 1 and 25.");
     }
     return projectAuditPage(
       await this.request(
         auth,
-        `${this.session.apiRoot()}log-feed/?o=-timestamp&page_size=25`,
+        `${this.session.apiRoot()}log-feed/?o=-timestamp&page_size=${auditPageSize}`,
       ),
       limit as number,
     );

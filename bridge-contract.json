@@ -1,0 +1,57 @@
+{
+  "versions": {
+    "config": 2,
+    "signedRequest": 1,
+    "extensionManifest": 3
+  },
+  "identity": {
+    "nativeHostName": "app.holvi_agent_bridge",
+    "extensionId": "oeedcemphbobfehfmcllmjhhhjgahgeb"
+  },
+  "origins": {
+    "account": "https://account.app.holvi.com",
+    "api": "https://holvi.com"
+  },
+  "actions": {
+    "doctor": [],
+    "transactions": ["transactions.read"],
+    "preview": ["transactions.read"],
+    "upload": ["transactions.read", "attachments.write"],
+    "bookkeeping.get": ["bookkeeping.read"],
+    "bookkeeping.categories": ["bookkeeping.read"],
+    "bookkeeping.suggestions": ["bookkeeping.read"],
+    "audit.list": ["audit.read"]
+  },
+  "fileBytes": {
+    "min": 1,
+    "max": 26214400,
+    "uploadChunk": 491520
+  },
+  "uploadMimeTypes": [
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/gif"
+  ],
+  "auditLimit": {
+    "min": 1,
+    "max": 25,
+    "pageSize": 25
+  },
+  "timeoutsMs": {
+    "signedRequestMaxAge": 30000,
+    "nativeRequest": 120000,
+    "uploadTransfer": 30000,
+    "nativeReconnect": 1000
+  },
+  "nativeMessaging": {
+    "hostToExtension": [
+      "host_ready",
+      "command",
+      "upload_start",
+      "upload_chunk",
+      "upload_end"
+    ],
+    "extensionToHost": ["tab_ready", "tab_unavailable", "result"]
+  }
+}

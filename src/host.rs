@@ -4,6 +4,11 @@ mod receipt;
 mod runtime;
 mod socket;
 
+#[cfg(test)]
+pub(crate) use receipt::FILE_CHUNK_BYTES;
+#[cfg(test)]
+pub(crate) use runtime::REQUEST_TIMEOUT;
+
 use anyhow::{Result, ensure};
 use serde_json::Value;
 use tokio::sync::oneshot;

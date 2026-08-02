@@ -76,9 +76,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn action_policy_matches_the_extension_fixture() {
+    fn action_policy_matches_the_bridge_contract() {
+        let contract: serde_json::Value =
+            serde_json::from_str(include_str!("../bridge-contract.json")).unwrap();
         let fixture: BTreeMap<String, Vec<String>> =
-            serde_json::from_str(include_str!("../capability-policy.json")).unwrap();
+            serde_json::from_value(contract["actions"].clone()).unwrap();
         let native: BTreeMap<String, Vec<String>> = ACTION_CAPABILITIES
             .iter()
             .map(|(action, capabilities)| {

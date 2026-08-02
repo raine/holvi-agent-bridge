@@ -1,6 +1,8 @@
 mod capabilities;
 mod cli;
 mod config;
+#[cfg(test)]
+mod contract_tests;
 mod filesystem;
 mod host;
 mod install;

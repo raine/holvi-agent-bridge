@@ -1,4 +1,4 @@
-import { supportedCapabilities } from "./policy.js";
+import { minimumFileBytes, supportedCapabilities } from "./policy.js";
 import type {
   RuntimeBridgeConfig,
   StaticBridgeConfig,
@@ -43,7 +43,7 @@ export function validateRuntimeConfig(
     ) ||
     new Set(config.capabilities).size !== config.capabilities.length ||
     !Number.isSafeInteger(config.maxFileBytes) ||
-    (config.maxFileBytes || 0) < 1 ||
+    (config.maxFileBytes || 0) < minimumFileBytes ||
     (config.maxFileBytes || 0) > staticConfig.maxFileBytes
   ) {
     throw new Error(

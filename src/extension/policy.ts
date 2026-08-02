@@ -1,3 +1,5 @@
+export const minimumFileBytes = 1;
+
 export const actionCapabilities = {
   doctor: [],
   transactions: ["transactions.read"],

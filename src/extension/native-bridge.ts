@@ -11,6 +11,32 @@ import { UploadWorkflow } from "./upload-workflow.js";
 
 const requestIdPattern = /^[0-9a-f-]{16,64}$/i;
 
+export const nativeReconnectDelayMs = 1000;
+const nativeMessageType = Object.freeze({
+  hostReady: "host_ready",
+  command: "command",
+  uploadStart: "upload_start",
+  uploadChunk: "upload_chunk",
+  uploadEnd: "upload_end",
+  tabReady: "tab_ready",
+  tabUnavailable: "tab_unavailable",
+  result: "result",
+});
+export const nativeMessageTypes = Object.freeze({
+  hostToExtension: [
+    nativeMessageType.hostReady,
+    nativeMessageType.command,
+    nativeMessageType.uploadStart,
+    nativeMessageType.uploadChunk,
+    nativeMessageType.uploadEnd,
+  ],
+  extensionToHost: [
+    nativeMessageType.tabReady,
+    nativeMessageType.tabUnavailable,
+    nativeMessageType.result,
+  ],
+});
+
 export class NativeBridge {
   private nativePort: chrome.runtime.Port | null = null;
   private reconnectTimer: number | null = null;
@@ -45,7 +71,7 @@ export class NativeBridge {
         this.reconnectTimer = self.setTimeout(() => {
           this.reconnectTimer = null;
           this.connect();
-        }, 1000);
+        }, nativeReconnectDelayMs);
       }
     });
   }
@@ -56,7 +82,9 @@ export class NativeBridge {
     }
     const tab = this.tabs.configuredTab();
     this.nativePort.postMessage(
-      tab ? { type: "tab_ready", tabId: tab[0] } : { type: "tab_unavailable" },
+      tab
+        ? { type: nativeMessageType.tabReady, tabId: tab[0] }
+        : { type: nativeMessageType.tabUnavailable },
     );
   }
 
@@ -71,9 +99,9 @@ export class NativeBridge {
     try {
       this.postNative(
         ok
-          ? { type: "result", id, ok, data: value }
+          ? { type: nativeMessageType.result, id, ok, data: value }
           : {
-              type: "result",
+              type: nativeMessageType.result,
               id,
               ok,
               error: value instanceof Error ? value.message : String(value),
@@ -118,7 +146,7 @@ export class NativeBridge {
       return;
     }
 
-    if (message.type === "host_ready") {
+    if (message.type === nativeMessageType.hostReady) {
       try {
         this.session.configure(message.config);
         this.reportTabState();
@@ -133,7 +161,7 @@ export class NativeBridge {
     }
     const id = message.id as string;
 
-    if (message.type === "command") {
+    if (message.type === nativeMessageType.command) {
       this.commands
         .handle(message)
         .then((data) => this.postResult(id, true, data))
@@ -141,7 +169,7 @@ export class NativeBridge {
       return;
     }
 
-    if (message.type === "upload_start") {
+    if (message.type === nativeMessageType.uploadStart) {
       try {
         this.uploadTransfers.start(
           {
@@ -163,7 +191,7 @@ export class NativeBridge {
       return;
     }
 
-    if (message.type === "upload_chunk") {
+    if (message.type === nativeMessageType.uploadChunk) {
       try {
         this.uploadTransfers.append(
           id,
@@ -180,7 +208,7 @@ export class NativeBridge {
       return;
     }
 
-    if (message.type === "upload_end") {
+    if (message.type === nativeMessageType.uploadEnd) {
       let upload: UploadTransfer;
       try {
         upload = this.uploadTransfers.complete(id, Date.now());

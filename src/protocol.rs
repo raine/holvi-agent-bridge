@@ -12,10 +12,32 @@ use sha2::Sha256;
 
 use crate::config::{is_lower_hex, validate_uuid};
 
+pub const SIGNED_REQUEST_VERSION: u8 = 1;
 pub const MAX_NATIVE_INPUT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_NATIVE_OUTPUT_BYTES: usize = 1024 * 1024;
 pub const MAX_SOCKET_REQUEST_BYTES: usize = 128 * 1024;
 pub const REQUEST_MAX_AGE_MS: u64 = 30_000;
+pub const AUDIT_LIMIT_MIN: u8 = 1;
+pub const AUDIT_LIMIT_MAX: u8 = 25;
+pub const HOST_READY_MESSAGE: &str = "host_ready";
+pub const COMMAND_MESSAGE: &str = "command";
+pub const UPLOAD_START_MESSAGE: &str = "upload_start";
+pub const UPLOAD_CHUNK_MESSAGE: &str = "upload_chunk";
+pub const UPLOAD_END_MESSAGE: &str = "upload_end";
+pub const TAB_READY_MESSAGE: &str = "tab_ready";
+pub const TAB_UNAVAILABLE_MESSAGE: &str = "tab_unavailable";
+pub const RESULT_MESSAGE: &str = "result";
+#[cfg(test)]
+pub const HOST_TO_EXTENSION_MESSAGES: [&str; 5] = [
+    HOST_READY_MESSAGE,
+    COMMAND_MESSAGE,
+    UPLOAD_START_MESSAGE,
+    UPLOAD_CHUNK_MESSAGE,
+    UPLOAD_END_MESSAGE,
+];
+#[cfg(test)]
+pub const EXTENSION_TO_HOST_MESSAGES: [&str; 3] =
+    [TAB_READY_MESSAGE, TAB_UNAVAILABLE_MESSAGE, RESULT_MESSAGE];
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -175,7 +197,7 @@ impl Action {
             "audit.list" => {
                 let params: AuditListParams = decode(params)?;
                 ensure!(
-                    (1..=25).contains(&params.limit),
+                    (AUDIT_LIMIT_MIN..=AUDIT_LIMIT_MAX).contains(&params.limit),
                     "Activity limit must be between 1 and 25."
                 );
                 Self::AuditList(params)
@@ -216,7 +238,7 @@ pub fn sign_request(secret: &str, action: Action) -> Result<SignedBridgeRequest>
     let mut nonce = [0_u8; 16];
     rand::rng().fill_bytes(&mut nonce);
     let request = WireBridgeRequest {
-        version: 1,
+        version: SIGNED_REQUEST_VERSION,
         id: uuid::Uuid::new_v4().to_string(),
         issued_at: now_millis(),
         nonce: hex::encode(nonce),
@@ -249,7 +271,7 @@ pub fn verify_request(
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() || byte == b'-');
     ensure!(
-        signed.version == 1
+        signed.version == SIGNED_REQUEST_VERSION
             && valid_id
             && clock.abs_diff(signed.issued_at) <= REQUEST_MAX_AGE_MS
             && is_lower_hex(&signed.nonce, 32)
@@ -366,7 +388,7 @@ mod tests {
     #[test]
     fn matches_the_existing_request_signature_format() {
         let request = WireBridgeRequest {
-            version: 1,
+            version: SIGNED_REQUEST_VERSION,
             id: "11111111-1111-4111-8111-111111111111".into(),
             issued_at: 1_720_000_000_000,
             nonce: "0123456789abcdef0123456789abcdef".into(),
@@ -501,7 +523,7 @@ mod tests {
 
     fn signed_value(action: &str, params: Value) -> Value {
         let request = WireBridgeRequest {
-            version: 1,
+            version: SIGNED_REQUEST_VERSION,
             id: "11111111-1111-4111-8111-111111111111".into(),
             issued_at: 1_720_000_000_000,
             nonce: "0123456789abcdef0123456789abcdef".into(),

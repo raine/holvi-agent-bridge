@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import policyFixture from "../../capability-policy.json";
+import bridgeContract from "../../bridge-contract.json";
 import {
   actionCapabilities,
   commandActions,
@@ -82,7 +82,7 @@ function payment() {
 describe("capability policy", () => {
   test("matches the cross-language policy fixture", () => {
     expect(JSON.stringify(actionCapabilities)).toBe(
-      JSON.stringify(policyFixture),
+      JSON.stringify(bridgeContract.actions),
     );
   });
 

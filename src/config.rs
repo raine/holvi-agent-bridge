@@ -12,10 +12,12 @@ use crate::filesystem::{
     current_user_uid, has_private_permissions, is_owned_by_current_user, is_regular_file,
 };
 
+pub const CONFIG_VERSION: u8 = 2;
 pub const EXTENSION_ID: &str = "oeedcemphbobfehfmcllmjhhhjgahgeb";
 pub const EXTENSION_ORIGIN: &str = "chrome-extension://oeedcemphbobfehfmcllmjhhhjgahgeb/";
 pub const HOST_NAME: &str = "app.holvi_agent_bridge";
 pub const ACCOUNT_ORIGIN: &str = "https://account.app.holvi.com";
+pub const MIN_FILE_BYTES: u64 = 1;
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
 pub const SUPPORTED_CAPABILITIES: [&str; 4] = [
     "transactions.read",
@@ -50,7 +52,7 @@ pub struct PublicBridgeConfig<'a> {
 impl BridgeConfig {
     pub fn validate(self) -> Result<Self> {
         ensure!(
-            self.version == 2,
+            self.version == CONFIG_VERSION,
             "Holvi Agent Bridge config version is invalid."
         );
         ensure!(
@@ -93,7 +95,7 @@ impl BridgeConfig {
             "attachments.write requires an approved attachment folder."
         );
         ensure!(
-            (1..=DEFAULT_MAX_FILE_BYTES).contains(&self.max_file_bytes),
+            (MIN_FILE_BYTES..=DEFAULT_MAX_FILE_BYTES).contains(&self.max_file_bytes),
             "Holvi Agent Bridge config has an invalid file-size limit."
         );
         Ok(self)

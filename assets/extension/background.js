@@ -2,6 +2,7 @@
 (() => {
 
   // src/extension/policy.ts
+  var minimumFileBytes = 1;
   var actionCapabilities = {
     doctor: [],
     transactions: ["transactions.read"],
@@ -454,7 +455,7 @@
     const config = value;
     const groupParts = (config.groupPathSegment || "").match(/^([^/+]+)\+([^/]+)$/);
     const groupPoolHandle = groupParts?.[1] || "";
-    if (!groupParts || groupPoolHandle !== config.poolHandle || !uuidPattern2.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < 1 || (config.maxFileBytes || 0) > staticConfig.maxFileBytes) {
+    if (!groupParts || groupPoolHandle !== config.poolHandle || !uuidPattern2.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < minimumFileBytes || (config.maxFileBytes || 0) > staticConfig.maxFileBytes) {
       throw new Error("The native host supplied an invalid Holvi account boundary.");
     }
     return config;
@@ -500,6 +501,9 @@
   }
 
   // src/extension/holvi-api.ts
+  var auditLimitMin = 1;
+  var auditLimitMax = 25;
+  var auditPageSize = 25;
   function asString2(value) {
     return typeof value === "string" ? value : "";
   }
@@ -610,10 +614,10 @@
       return projectSuggestions(await this.request(auth, `${this.debtPath(validUuid)}haip/bookkeeping-suggestions/`), validUuid);
     }
     async recentAudit(auth, limit) {
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 25) {
+      if (!Number.isSafeInteger(limit) || limit < auditLimitMin || limit > auditLimitMax) {
         throw new Error("Activity limit must be between 1 and 25.");
       }
-      return projectAuditPage(await this.request(auth, `${this.session.apiRoot()}log-feed/?o=-timestamp&page_size=25`), limit);
+      return projectAuditPage(await this.request(auth, `${this.session.apiRoot()}log-feed/?o=-timestamp&page_size=${auditPageSize}`), limit);
     }
   }
 
@@ -672,7 +676,7 @@
       if (typeof message.debtUuid !== "string" || !uuidPattern3.test(message.debtUuid)) {
         throw new UploadTransferError("A valid Holvi debt UUID is required.", message.id);
       }
-      if (!Number.isSafeInteger(message.size) || message.size < 1 || message.size > maxFileBytes) {
+      if (!Number.isSafeInteger(message.size) || message.size < minimumFileBytes || message.size > maxFileBytes) {
         throw new UploadTransferError("Receipt size is outside the configured limit.", message.id);
       }
       const expectedChunks = Math.ceil(message.size / fileChunkBytes);
@@ -752,6 +756,31 @@
 
   // src/extension/native-bridge.ts
   var requestIdPattern = /^[0-9a-f-]{16,64}$/i;
+  var nativeReconnectDelayMs = 1000;
+  var nativeMessageType = Object.freeze({
+    hostReady: "host_ready",
+    command: "command",
+    uploadStart: "upload_start",
+    uploadChunk: "upload_chunk",
+    uploadEnd: "upload_end",
+    tabReady: "tab_ready",
+    tabUnavailable: "tab_unavailable",
+    result: "result"
+  });
+  var nativeMessageTypes = Object.freeze({
+    hostToExtension: [
+      nativeMessageType.hostReady,
+      nativeMessageType.command,
+      nativeMessageType.uploadStart,
+      nativeMessageType.uploadChunk,
+      nativeMessageType.uploadEnd
+    ],
+    extensionToHost: [
+      nativeMessageType.tabReady,
+      nativeMessageType.tabUnavailable,
+      nativeMessageType.result
+    ]
+  });
 
   class NativeBridge {
     staticConfig;
@@ -785,7 +814,7 @@
           this.reconnectTimer = self.setTimeout(() => {
             this.reconnectTimer = null;
             this.connect();
-          }, 1000);
+          }, nativeReconnectDelayMs);
         }
       });
     }
@@ -794,7 +823,7 @@
         return;
       }
       const tab = this.tabs.configuredTab();
-      this.nativePort.postMessage(tab ? { type: "tab_ready", tabId: tab[0] } : { type: "tab_unavailable" });
+      this.nativePort.postMessage(tab ? { type: nativeMessageType.tabReady, tabId: tab[0] } : { type: nativeMessageType.tabUnavailable });
     }
     postNative(message) {
       if (!this.nativePort) {
@@ -804,8 +833,8 @@
     }
     postResult(id, ok, value) {
       try {
-        this.postNative(ok ? { type: "result", id, ok, data: value } : {
-          type: "result",
+        this.postNative(ok ? { type: nativeMessageType.result, id, ok, data: value } : {
+          type: nativeMessageType.result,
           id,
           ok,
           error: value instanceof Error ? value.message : String(value)
@@ -836,7 +865,7 @@
       if (!message || typeof message !== "object") {
         return;
       }
-      if (message.type === "host_ready") {
+      if (message.type === nativeMessageType.hostReady) {
         try {
           this.session.configure(message.config);
           this.reportTabState();
@@ -849,11 +878,11 @@
         return;
       }
       const id = message.id;
-      if (message.type === "command") {
+      if (message.type === nativeMessageType.command) {
         this.commands.handle(message).then((data) => this.postResult(id, true, data)).catch((error) => this.postResult(id, false, error));
         return;
       }
-      if (message.type === "upload_start") {
+      if (message.type === nativeMessageType.uploadStart) {
         try {
           this.uploadTransfers.start({
             id,
@@ -870,7 +899,7 @@
         }
         return;
       }
-      if (message.type === "upload_chunk") {
+      if (message.type === nativeMessageType.uploadChunk) {
         try {
           this.uploadTransfers.append(id, message.index, message.data, Date.now());
         } catch (error) {
@@ -881,7 +910,7 @@
         }
         return;
       }
-      if (message.type === "upload_end") {
+      if (message.type === nativeMessageType.uploadEnd) {
         let upload;
         try {
           upload = this.uploadTransfers.complete(id, Date.now());

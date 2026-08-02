@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use super::receipt;
 use crate::capabilities::required_capabilities;
 use crate::config::BridgeConfig;
-use crate::protocol::{Action, BridgeRequest};
+use crate::protocol::{Action, BridgeRequest, COMMAND_MESSAGE};
 
 pub fn validate(
     request: &BridgeRequest,
@@ -46,7 +46,7 @@ pub async fn send(
         Action::Upload(params) => receipt::transfer(&request.id, params, &config, &native).await,
         action => native
             .send(json!({
-                "type": "command",
+                "type": COMMAND_MESSAGE,
                 "id": request.id,
                 "action": action.name(),
                 "params": action.params(),

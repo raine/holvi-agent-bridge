@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 
+pub const MIN_RECEIPT_BYTES: u64 = 1;
+pub const UPLOAD_MIME_TYPES: [&str; 4] =
+    ["application/pdf", "image/png", "image/jpeg", "image/gif"];
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReceiptFile {
@@ -99,7 +103,7 @@ pub fn resolve_receipt_file(
         "Receipt path must identify a regular file."
     );
     ensure!(
-        (1..=max_file_bytes).contains(&path_metadata.len()),
+        (MIN_RECEIPT_BYTES..=max_file_bytes).contains(&path_metadata.len()),
         "Receipt size must be between 1 and {} bytes.",
         max_file_bytes
     );
@@ -120,10 +124,10 @@ pub fn resolve_receipt_file(
         .unwrap_or_default()
         .to_ascii_lowercase();
     let mime_type = match extension.as_str() {
-        "pdf" => "application/pdf",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
+        "pdf" => UPLOAD_MIME_TYPES[0],
+        "png" => UPLOAD_MIME_TYPES[1],
+        "jpg" | "jpeg" => UPLOAD_MIME_TYPES[2],
+        "gif" => UPLOAD_MIME_TYPES[3],
         _ => bail!("Receipt type must be PDF, PNG, JPEG, or GIF."),
     };
     let file_name = candidate

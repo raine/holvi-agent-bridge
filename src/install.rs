@@ -11,8 +11,9 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::config::{
-    BridgeConfig, DEFAULT_MAX_FILE_BYTES, EXTENSION_ID, EXTENSION_ORIGIN, HOST_NAME,
-    SUPPORTED_CAPABILITIES, default_config_path, is_lower_hex, parse_group_url, validate_uuid,
+    BridgeConfig, CONFIG_VERSION, DEFAULT_MAX_FILE_BYTES, EXTENSION_ID, EXTENSION_ORIGIN,
+    HOST_NAME, SUPPORTED_CAPABILITIES, default_config_path, is_lower_hex, parse_group_url,
+    validate_uuid,
 };
 use crate::filesystem::{has_private_permissions, is_owned_by_current_user, is_regular_file};
 use crate::receipt_sandbox::resolve_receipt_root;
@@ -124,7 +125,7 @@ fn install_bridge_with_layout(
     let native_host_manifest = manifest_directory.join(format!("{HOST_NAME}.json"));
 
     let config = BridgeConfig {
-        version: 2,
+        version: CONFIG_VERSION,
         group_path_segment,
         pool_handle,
         payment_account_uuid: options.payment_account_uuid,

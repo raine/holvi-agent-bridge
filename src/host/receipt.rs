@@ -8,10 +8,12 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::mpsc;
 
 use crate::config::BridgeConfig;
-use crate::protocol::UploadParams;
+use crate::protocol::{
+    UPLOAD_CHUNK_MESSAGE, UPLOAD_END_MESSAGE, UPLOAD_START_MESSAGE, UploadParams,
+};
 use crate::receipt_sandbox::resolve_receipt_file;
 
-const FILE_CHUNK_BYTES: usize = 480 * 1024;
+pub const FILE_CHUNK_BYTES: usize = 480 * 1024;
 
 pub async fn transfer(
     id: &str,
@@ -41,7 +43,7 @@ pub async fn transfer(
 
     native
         .send(json!({
-            "type": "upload_start",
+            "type": UPLOAD_START_MESSAGE,
             "id": id,
             "debtUuid": params.debt_uuid,
             "fileName": receipt.file_name,
@@ -61,7 +63,7 @@ pub async fn transfer(
         file.read_exact(&mut buffer[..length]).await?;
         native
             .send(json!({
-                "type": "upload_chunk",
+                "type": UPLOAD_CHUNK_MESSAGE,
                 "id": id,
                 "index": index,
                 "data": base64::engine::general_purpose::STANDARD.encode(&buffer[..length]),
@@ -71,7 +73,7 @@ pub async fn transfer(
     }
     receipt.ensure_unchanged()?;
     native
-        .send(json!({"type": "upload_end", "id": id}))
+        .send(json!({"type": UPLOAD_END_MESSAGE, "id": id}))
         .await
         .context("Chrome native output closed.")?;
     Ok(())

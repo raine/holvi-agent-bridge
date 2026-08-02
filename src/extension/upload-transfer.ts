@@ -1,4 +1,6 @@
-const uploadMimeTypes = new Set([
+import { minimumFileBytes } from "./policy.js";
+
+export const uploadMimeTypes: ReadonlySet<string> = new Set([
   "application/pdf",
   "image/png",
   "image/jpeg",
@@ -114,7 +116,7 @@ export class UploadTransferLifecycle {
     }
     if (
       !Number.isSafeInteger(message.size) ||
-      (message.size as number) < 1 ||
+      (message.size as number) < minimumFileBytes ||
       (message.size as number) > maxFileBytes
     ) {
       throw new UploadTransferError(
