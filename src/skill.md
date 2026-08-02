@@ -130,9 +130,10 @@ A receipt upload is a write. Always use this sequence:
   sensitive data into an approved root to bypass a path rejection.
 - Accepted files are nonempty PDF, PNG, JPEG, or GIF files under an approved
   canonical receipt root and within the configured size limit.
-- The bridge refuses a write when the debt already has an attachment. It reads
-  before the upload and succeeds only after a read verifies exactly one
-  attachment.
+- The bridge snapshots every existing attachment before upload. It succeeds only
+  after a read verifies exactly one new attachment and finds every existing
+  attachment unchanged. Use the returned attachment code for any later action
+  on the uploaded file.
 - Report the verified result. Do not claim success from the initial upload
   response alone.
 

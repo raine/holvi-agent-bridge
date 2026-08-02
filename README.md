@@ -583,8 +583,10 @@ holvi attachments upload --debt UUID --file /absolute/path/to/receipt.pdf [--yes
 
 Without `--yes`, the command reads the debt and prints `dryRun`, `transaction`,
 `receipt`, and `next` fields without modifying Holvi. With `--yes`, the
-extension requires zero existing attachments, uploads the file, and verifies
-that the resulting attachment count is exactly one.
+extension snapshots the existing attachments, uploads the file, and verifies
+that exactly one new attachment appeared while every existing attachment stayed
+unchanged. The result identifies the new attachment by its exact code, title,
+and format.
 
 Accepted files are nonempty PDF, PNG, JPEG, or GIF files within the configured
 size limit. Canonical path checks reject relative paths and symlink escapes.

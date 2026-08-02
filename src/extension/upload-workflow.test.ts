@@ -89,6 +89,67 @@ describe("receipt upload workflow", () => {
     expect(delays).toEqual([250]);
   });
 
+  test("preserves existing attachments and identifies exactly one addition", async () => {
+    const session = configuredSession();
+    const methods: string[] = [];
+    const after = debt(3);
+    after.attachments = [
+      after.attachments[1]!,
+      after.attachments[2]!,
+      after.attachments[0]!,
+    ];
+    const responses = [debt(2), {}, debt(2), after];
+    const fetchRequest = async (
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      methods.push(init?.method || "GET");
+      return jsonResponse(responses.shift());
+    };
+    const api = new HolviApi(staticConfig, session, fetchRequest);
+    const workflow = new UploadWorkflow(session, api, async () => {});
+
+    await expect(workflow.uploadReceipt(auth, upload)).resolves.toMatchObject({
+      debtUuid,
+      attachmentCountBefore: 2,
+      attachmentCountAfter: 3,
+      attachment: {
+        attachmentCode: "ATTACHMENT-3",
+        title: "receipt-3.pdf",
+        format: "pdf",
+      },
+    });
+    expect(methods).toEqual(["GET", "POST", "GET", "GET"]);
+  });
+
+  test("fails verification when an existing attachment changes", async () => {
+    const session = configuredSession();
+    const changed = debt(2);
+    changed.attachments[0]!.title = "changed-existing.pdf";
+    const responses = [debt(1), {}, changed];
+    const api = new HolviApi(staticConfig, session, async () =>
+      jsonResponse(responses.shift()),
+    );
+    const workflow = new UploadWorkflow(session, api, async () => {});
+
+    await expect(workflow.uploadReceipt(auth, upload)).rejects.toThrow(
+      "verification found a changed existing attachment",
+    );
+  });
+
+  test("fails verification when more than one attachment appears", async () => {
+    const session = configuredSession();
+    const responses = [debt(1), {}, debt(3)];
+    const api = new HolviApi(staticConfig, session, async () =>
+      jsonResponse(responses.shift()),
+    );
+    const workflow = new UploadWorkflow(session, api, async () => {});
+
+    await expect(workflow.uploadReceipt(auth, upload)).rejects.toThrow(
+      "expected 2 attachment(s) and found 3",
+    );
+  });
+
   test("rejects a debt from another payment account before upload", async () => {
     const session = configuredSession();
     const methods: string[] = [];

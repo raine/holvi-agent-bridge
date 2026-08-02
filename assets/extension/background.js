@@ -1706,6 +1706,40 @@
   }
 
   // src/extension/upload-workflow.ts
+  function projectedAttachments(debt) {
+    if (!Array.isArray(debt.attachments)) {
+      throw new Error("Projected upload debt has an invalid attachment list.");
+    }
+    return debt.attachments.map((attachment) => attachment);
+  }
+  function attachmentCode2(attachment) {
+    if (typeof attachment.attachmentCode !== "string" || !attachment.attachmentCode) {
+      throw new Error("Projected upload attachment has an invalid code.");
+    }
+    return attachment.attachmentCode;
+  }
+  function verifyAdditiveUpload(before, after) {
+    const expectedCount = before.length + 1;
+    if (after.length !== expectedCount) {
+      throw new Error(`Holvi accepted the upload but verification expected ${expectedCount} attachment(s) and found ${after.length}. Inspect the transaction before retrying.`);
+    }
+    const existing = new Map(before.map((attachment) => [attachmentCode2(attachment), attachment]));
+    for (const [code, expected] of existing) {
+      const actual = after.find((attachment) => attachmentCode2(attachment) === code);
+      if (!actual) {
+        throw new Error("Holvi accepted the upload but verification found a missing existing attachment. Inspect the transaction before retrying.");
+      }
+      if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+        throw new Error("Holvi accepted the upload but verification found a changed existing attachment. Inspect the transaction before retrying.");
+      }
+    }
+    const added = after.filter((attachment) => !existing.has(attachmentCode2(attachment)));
+    if (added.length !== 1) {
+      throw new Error(`Holvi accepted the upload but verification found ${added.length} new attachment(s). Inspect the transaction before retrying.`);
+    }
+    return added[0];
+  }
+
   class UploadWorkflow {
     session;
     api;
@@ -1719,9 +1753,10 @@
       this.session.requireCapabilities("transactions.read", "attachments.write");
       const debtUuid = validateUuid(upload.debtUuid, "debt");
       const before = projectUploadDebtRead(await this.api.request(auth, this.api.debtPath(debtUuid)), debtUuid, this.session.config.paymentAccountUuid);
-      const beforeCount = before.attachmentCount;
-      if (beforeCount !== 0) {
-        throw new Error(`Upload refused because the transaction has ${beforeCount} attachment(s).`);
+      const beforeAttachments = projectedAttachments(before);
+      const beforeCount = beforeAttachments.length;
+      if (beforeCount >= maxDebtAttachments) {
+        throw new Error(`Upload refused because the transaction has reached the ${maxDebtAttachments}-attachment verification limit.`);
       }
       if (typeof before.code !== "string" || !before.code) {
         throw new Error("Holvi did not return the object code required for upload.");
@@ -1735,26 +1770,25 @@
         method: "POST",
         body: form
       });
-      let afterCount = 0;
+      let afterAttachments = beforeAttachments;
       for (const delay of [0, 250, 500, 1000, 2000]) {
         if (delay) {
           await this.sleep(delay);
         }
         const after = projectUploadDebtRead(await this.api.request(auth, this.api.debtPath(debtUuid)), debtUuid, this.session.config.paymentAccountUuid);
-        afterCount = after.attachmentCount;
-        if (afterCount > 0) {
+        afterAttachments = projectedAttachments(after);
+        if (afterAttachments.length > beforeCount) {
           break;
         }
       }
-      if (afterCount !== 1) {
-        throw new Error(`Holvi accepted the upload but verification found ${afterCount} attachment(s). Inspect the transaction before retrying.`);
-      }
+      const attachment = verifyAdditiveUpload(beforeAttachments, afterAttachments);
       return {
         debtUuid,
         fileName: upload.fileName,
         sha256: upload.sha256,
         attachmentCountBefore: beforeCount,
-        attachmentCountAfter: afterCount
+        attachmentCountAfter: afterAttachments.length,
+        attachment
       };
     }
   }
