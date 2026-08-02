@@ -2,6 +2,7 @@ use std::env;
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs;
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::time::Duration;
@@ -237,7 +238,7 @@ pub async fn run() -> Result<()> {
         if json_output {
             println!("{}", serde_json::to_string_pretty(&result)?);
         } else {
-            print!("{}", format_install(&result));
+            print!("{}", format_install(&result, ReportRenderer::auto()));
         }
         return Ok(());
     }
@@ -268,7 +269,10 @@ pub async fn run() -> Result<()> {
                     "operations": actions,
                 }))?;
             } else {
-                print!("{}", format_capabilities(&config.capabilities, &actions));
+                print!(
+                    "{}",
+                    format_capabilities(&config.capabilities, &actions, ReportRenderer::auto(),)
+                );
             }
         }
         Command::Doctor(args) => {
@@ -278,7 +282,7 @@ pub async fn run() -> Result<()> {
             if args.json {
                 print_json(&result)?;
             } else {
-                print!("{}", format_doctor(doctor));
+                print!("{}", format_doctor(doctor, ReportRenderer::auto()));
             }
         }
         Command::Transactions(args) => {
@@ -519,89 +523,242 @@ fn validate_doctor(config: &BridgeConfig, doctor: &DoctorResult) -> Result<()> {
     Ok(())
 }
 
-fn write_heading(output: &mut String, title: &str) {
-    writeln!(output, "{title}").unwrap();
-    writeln!(output, "{}", "-".repeat(title.chars().count())).unwrap();
+#[derive(Clone, Copy)]
+struct ReportRenderer {
+    styled: bool,
 }
 
-fn write_status(output: &mut String, marker: &str, label: &str, value: &str) {
-    writeln!(output, "  {marker:<2} {label:<24} {value}").unwrap();
+impl ReportRenderer {
+    fn auto() -> Self {
+        Self {
+            styled: io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
+        }
+    }
+
+    #[cfg(test)]
+    fn plain() -> Self {
+        Self { styled: false }
+    }
+
+    #[cfg(test)]
+    fn styled() -> Self {
+        Self { styled: true }
+    }
+
+    fn paint(self, text: &str, style: &str) -> String {
+        if self.styled {
+            format!("\x1b[{style}m{text}\x1b[0m")
+        } else {
+            text.to_owned()
+        }
+    }
+
+    fn write_title(self, output: &mut String, title: &str) {
+        writeln!(output, "{}", self.paint(title, "1;38;2;45;174;135")).unwrap();
+    }
+
+    fn write_heading(self, output: &mut String, title: &str) {
+        output.push('\n');
+        writeln!(output, "{}", self.paint(title, "1;36")).unwrap();
+        if !self.styled {
+            writeln!(output, "{}", "-".repeat(title.chars().count())).unwrap();
+        }
+    }
+
+    fn write_rows(self, output: &mut String, rows: &[ReportRow]) {
+        let label_width = rows
+            .iter()
+            .map(|row| row.label.chars().count())
+            .max()
+            .unwrap_or_default();
+        for row in rows {
+            let label = format!("{:<label_width$}", row.label);
+            if self.styled {
+                writeln!(
+                    output,
+                    "  {} {}  {}",
+                    self.paint(row.status.icon(), row.status.icon_style()),
+                    self.paint(&label, row.status.label_style()),
+                    self.paint(&row.value, "38;2;150;150;150"),
+                )
+                .unwrap();
+            } else {
+                writeln!(output, "  {} {label}  {}", row.status.marker(), row.value).unwrap();
+            }
+        }
+    }
+
+    fn write_section(self, output: &mut String, title: &str, rows: &[ReportRow]) {
+        self.write_heading(output, title);
+        self.write_rows(output, rows);
+    }
+
+    fn write_steps(self, output: &mut String, steps: &[&str]) {
+        for (index, step) in steps.iter().enumerate() {
+            let number = format!("{}.", index + 1);
+            if self.styled {
+                writeln!(
+                    output,
+                    "  {}  {}",
+                    self.paint(&number, "1;38;2;45;174;135"),
+                    self.paint(step, "38;2;150;150;150"),
+                )
+                .unwrap();
+            } else {
+                writeln!(output, "  {number} {step}").unwrap();
+            }
+        }
+    }
 }
 
-fn format_install(result: &InstallResult) -> String {
+#[derive(Clone, Copy)]
+enum ReportStatus {
+    Ok,
+    Warning,
+    Error,
+    Info,
+}
+
+impl ReportStatus {
+    fn marker(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Warning | Self::Error => "!!",
+            Self::Info => "..",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Ok => "✓",
+            Self::Warning => "!",
+            Self::Error => "✗",
+            Self::Info => "·",
+        }
+    }
+
+    fn icon_style(self) -> &'static str {
+        match self {
+            Self::Ok => "1;32",
+            Self::Warning => "1;33",
+            Self::Error => "1;31",
+            Self::Info => "1;90",
+        }
+    }
+
+    fn label_style(self) -> &'static str {
+        match self {
+            Self::Ok | Self::Warning | Self::Error => "37",
+            Self::Info => "90",
+        }
+    }
+}
+
+struct ReportRow {
+    status: ReportStatus,
+    label: String,
+    value: String,
+}
+
+impl ReportRow {
+    fn new(status: ReportStatus, label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            status,
+            label: label.into(),
+            value: value.into(),
+        }
+    }
+}
+
+fn format_install(result: &InstallResult, renderer: ReportRenderer) -> String {
     let mut output = String::new();
-    write_heading(&mut output, "Installation");
-    write_status(
+    renderer.write_title(&mut output, "holvi install");
+    renderer.write_section(
         &mut output,
-        "ok",
-        "config file",
-        &result.config_path.to_string_lossy(),
+        "Installation",
+        &[
+            ReportRow::new(
+                ReportStatus::Ok,
+                "config file",
+                result.config_path.to_string_lossy(),
+            ),
+            ReportRow::new(
+                ReportStatus::Ok,
+                "extension files",
+                result.extension_path.to_string_lossy(),
+            ),
+            ReportRow::new(ReportStatus::Info, "extension id", result.extension_id),
+            ReportRow::new(
+                ReportStatus::Ok,
+                "native host",
+                result.native_host_manifest.to_string_lossy(),
+            ),
+            ReportRow::new(
+                match result.host_restart {
+                    HostRestartStatus::Requested => ReportStatus::Ok,
+                    HostRestartStatus::NotRunning => ReportStatus::Info,
+                    HostRestartStatus::ManualRequired => ReportStatus::Warning,
+                },
+                "active host",
+                match result.host_restart {
+                    HostRestartStatus::Requested => "restart requested",
+                    HostRestartStatus::NotRunning => "starts on demand",
+                    HostRestartStatus::ManualRequired => "extension reload required",
+                },
+            ),
+        ],
     );
-    write_status(
+    renderer.write_heading(&mut output, "Next steps");
+    renderer.write_steps(
         &mut output,
-        "ok",
-        "extension files",
-        &result.extension_path.to_string_lossy(),
+        &[
+            "In chrome://extensions, load or reload the unpacked extension.",
+            "Open or reload the configured Holvi group tab.",
+            "Run holvi doctor.",
+        ],
     );
-    write_status(&mut output, "..", "extension id", result.extension_id);
-    write_status(
-        &mut output,
-        "ok",
-        "native host",
-        &result.native_host_manifest.to_string_lossy(),
-    );
-    write_status(
-        &mut output,
-        match result.host_restart {
-            HostRestartStatus::Requested => "ok",
-            HostRestartStatus::NotRunning => "..",
-            HostRestartStatus::ManualRequired => "!!",
-        },
-        "active host",
-        match result.host_restart {
-            HostRestartStatus::Requested => "restart requested",
-            HostRestartStatus::NotRunning => "starts on demand",
-            HostRestartStatus::ManualRequired => "extension reload required",
-        },
-    );
-    output.push('\n');
-    write_heading(&mut output, "Next steps");
-    writeln!(
-        output,
-        "  1. In chrome://extensions, load or reload the unpacked extension."
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "  2. Open or reload the configured Holvi group tab."
-    )
-    .unwrap();
-    writeln!(output, "  3. Run holvi doctor.").unwrap();
     output
 }
 
-fn format_capabilities(capabilities: &[String], actions: &EnabledActions) -> String {
+fn format_capabilities(
+    capabilities: &[String],
+    actions: &EnabledActions,
+    renderer: ReportRenderer,
+) -> String {
     let mut output = String::new();
-    write_heading(&mut output, "Capabilities");
-    for capability in SUPPORTED_CAPABILITIES {
-        let enabled = capabilities.iter().any(|item| item == capability);
-        write_status(
-            &mut output,
-            if enabled { "ok" } else { "--" },
-            capability,
-            if enabled { "enabled" } else { "disabled" },
-        );
-    }
-    output.push('\n');
-    write_heading(&mut output, "Operations");
-    for (action, enabled) in actions.iter() {
-        write_status(
-            &mut output,
-            if enabled { "ok" } else { "--" },
-            action,
-            if enabled { "enabled" } else { "disabled" },
-        );
-    }
+    renderer.write_title(&mut output, "holvi capabilities");
+    let capability_rows = SUPPORTED_CAPABILITIES
+        .iter()
+        .map(|capability| {
+            let enabled = capabilities.iter().any(|item| item == capability);
+            ReportRow::new(
+                if enabled {
+                    ReportStatus::Ok
+                } else {
+                    ReportStatus::Info
+                },
+                *capability,
+                if enabled { "enabled" } else { "disabled" },
+            )
+        })
+        .collect::<Vec<_>>();
+    renderer.write_section(&mut output, "Capabilities", &capability_rows);
+
+    let operation_rows = actions
+        .iter()
+        .map(|(action, enabled)| {
+            ReportRow::new(
+                if enabled {
+                    ReportStatus::Ok
+                } else {
+                    ReportStatus::Info
+                },
+                action,
+                if enabled { "enabled" } else { "disabled" },
+            )
+        })
+        .collect::<Vec<_>>();
+    renderer.write_section(&mut output, "Operations", &operation_rows);
     output
 }
 
@@ -609,66 +766,72 @@ fn count_label(count: usize, singular: &str, plural: &str) -> String {
     format!("{count} {}", if count == 1 { singular } else { plural })
 }
 
-fn format_doctor(doctor: DoctorResult) -> String {
+fn format_doctor(doctor: DoctorResult, renderer: ReportRenderer) -> String {
     let mut output = String::new();
-    write_heading(&mut output, "Connection");
-    write_status(
+    renderer.write_title(&mut output, "holvi doctor");
+    renderer.write_section(
         &mut output,
-        if doctor.connected { "ok" } else { "--" },
-        "Chrome bridge",
-        if doctor.connected {
-            "connected"
-        } else {
-            "disconnected"
-        },
+        "Connection",
+        &[
+            ReportRow::new(
+                if doctor.connected {
+                    ReportStatus::Ok
+                } else {
+                    ReportStatus::Error
+                },
+                "Chrome bridge",
+                if doctor.connected {
+                    "connected"
+                } else {
+                    "disconnected"
+                },
+            ),
+            ReportRow::new(ReportStatus::Ok, "Holvi session", "authenticated"),
+            ReportRow::new(
+                ReportStatus::Ok,
+                "native protocol",
+                doctor
+                    .protocol_version
+                    .map_or_else(|| "unknown".into(), |value| value.to_string()),
+            ),
+            ReportRow::new(
+                ReportStatus::Ok,
+                "host version",
+                doctor.host_version.as_deref().unwrap_or("unknown"),
+            ),
+            ReportRow::new(
+                ReportStatus::Ok,
+                "extension version",
+                doctor.extension_version.as_deref().unwrap_or("unknown"),
+            ),
+        ],
     );
-    write_status(&mut output, "ok", "Holvi session", "authenticated");
-    write_status(
+    renderer.write_section(
         &mut output,
-        "ok",
-        "native protocol",
-        &doctor
-            .protocol_version
-            .map_or_else(|| "unknown".into(), |value| value.to_string()),
-    );
-    write_status(
-        &mut output,
-        "ok",
-        "host version",
-        doctor.host_version.as_deref().unwrap_or("unknown"),
-    );
-    write_status(
-        &mut output,
-        "ok",
-        "extension version",
-        doctor.extension_version.as_deref().unwrap_or("unknown"),
+        "Account",
+        &[
+            ReportRow::new(ReportStatus::Info, "group", doctor.group_path_segment),
+            ReportRow::new(ReportStatus::Info, "pool", doctor.pool_handle),
+            ReportRow::new(
+                ReportStatus::Info,
+                "payment account",
+                doctor.payment_account_uuid,
+            ),
+        ],
     );
 
-    output.push('\n');
-    write_heading(&mut output, "Account");
-    write_status(&mut output, "..", "group", &doctor.group_path_segment);
-    write_status(&mut output, "..", "pool", &doctor.pool_handle);
-    write_status(
-        &mut output,
-        "..",
-        "payment account",
-        &doctor.payment_account_uuid,
-    );
+    let capability_rows = doctor
+        .capabilities
+        .into_iter()
+        .map(|capability| ReportRow::new(ReportStatus::Ok, capability, "enabled"))
+        .collect::<Vec<_>>();
+    renderer.write_section(&mut output, "Capabilities", &capability_rows);
 
-    output.push('\n');
-    write_heading(&mut output, "Capabilities");
-    for capability in doctor.capabilities {
-        write_status(&mut output, "ok", &capability, "enabled");
-    }
-
-    output.push('\n');
-    write_heading(&mut output, "API probe");
-    match doctor.probe_action.as_deref() {
-        Some("transactions") => write_status(
-            &mut output,
-            "ok",
+    let probe_row = match doctor.probe_action.as_deref() {
+        Some("transactions") => ReportRow::new(
+            ReportStatus::Ok,
             "transactions",
-            &format!(
+            format!(
                 "{} on first page",
                 count_label(
                     doctor.first_page_results.unwrap_or_default(),
@@ -677,29 +840,28 @@ fn format_doctor(doctor: DoctorResult) -> String {
                 )
             ),
         ),
-        Some("bookkeeping.categories") => write_status(
-            &mut output,
-            "ok",
+        Some("bookkeeping.categories") => ReportRow::new(
+            ReportStatus::Ok,
             "bookkeeping categories",
-            &count_label(
+            count_label(
                 doctor.category_count.unwrap_or_default(),
                 "category",
                 "categories",
             ),
         ),
-        Some("audit.list") => write_status(
-            &mut output,
-            "ok",
+        Some("audit.list") => ReportRow::new(
+            ReportStatus::Ok,
             "audit activity",
-            &count_label(
+            count_label(
                 doctor.recent_activity_count.unwrap_or_default(),
                 "result",
                 "results",
             ),
         ),
-        Some(action) => write_status(&mut output, "ok", action, "completed"),
-        None => write_status(&mut output, "..", "API probe", "read capability required"),
-    }
+        Some(action) => ReportRow::new(ReportStatus::Ok, action, "completed"),
+        None => ReportRow::new(ReportStatus::Info, "API probe", "read capability required"),
+    };
+    renderer.write_section(&mut output, "API probe", &[probe_row]);
     output
 }
 
@@ -896,58 +1058,25 @@ mod tests {
     }
 
     #[test]
-    fn renders_capabilities_as_a_scannable_status_report() {
+    fn renders_plain_capabilities_as_a_scannable_status_report() {
         let configured = vec!["transactions.read".into(), "attachments.write".into()];
-        let output = format_capabilities(&configured, &enabled_actions(&configured));
-
-        assert_eq!(
-            output,
-            concat!(
-                "Capabilities\n",
-                "------------\n",
-                "  ok transactions.read        enabled\n",
-                "  ok attachments.write        enabled\n",
-                "  -- bookkeeping.read         disabled\n",
-                "  -- audit.read               disabled\n",
-                "\n",
-                "Operations\n",
-                "----------\n",
-                "  ok doctor                   enabled\n",
-                "  ok transactions             enabled\n",
-                "  ok preview                  enabled\n",
-                "  ok upload                   enabled\n",
-                "  -- bookkeeping.get          disabled\n",
-                "  -- bookkeeping.categories   disabled\n",
-                "  -- bookkeeping.suggestions  disabled\n",
-                "  -- audit.list               disabled\n",
-            )
+        let output = format_capabilities(
+            &configured,
+            &enabled_actions(&configured),
+            ReportRenderer::plain(),
         );
-    }
 
-    #[test]
-    fn renders_doctor_connection_scope_and_probe() {
-        let output = format_doctor(DoctorResult {
-            connected: true,
-            group_path_segment: "AbC123+example-company".into(),
-            pool_handle: "example-company".into(),
-            payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
-            capabilities: vec!["transactions.read".into()],
-            protocol_version: Some(NATIVE_PROTOCOL_VERSION),
-            host_version: Some(HOST_BUILD_VERSION.into()),
-            extension_version: Some(HOST_BUILD_VERSION.into()),
-            probe_action: Some("transactions".into()),
-            first_page_results: Some(3),
-            category_count: None,
-            recent_activity_count: None,
-        });
-
+        assert!(output.starts_with("holvi capabilities\n\nCapabilities\n------------\n"));
+        assert!(output.contains("  ok transactions.read  enabled\n"));
+        assert!(output.contains("  .. bookkeeping.read   disabled\n"));
+        assert!(output.contains("\nOperations\n----------\n"));
+        assert!(output.contains("  ok doctor                   enabled\n"));
         assert!(
-            output.contains("Connection\n----------\n  ok Chrome bridge            connected\n")
+            output
+                .lines()
+                .any(|line| line.starts_with("  .. audit.list") && line.ends_with("disabled"))
         );
-        assert!(output.contains("Account\n-------\n  .. group"));
-        assert!(output.contains("AbC123+example-company"));
-        assert!(output.contains("API probe\n---------\n  ok transactions"));
-        assert!(output.contains("3 results on first page"));
+        assert!(!output.contains("\x1b["));
     }
 
     #[test]
@@ -996,7 +1125,59 @@ mod tests {
     }
 
     #[test]
-    fn renders_install_paths_and_next_steps() {
+    fn renders_styled_doctor_connection_scope_and_probe() {
+        let output = format_doctor(
+            DoctorResult {
+                connected: true,
+                group_path_segment: "AbC123+example-company".into(),
+                pool_handle: "example-company".into(),
+                payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
+                capabilities: vec!["transactions.read".into()],
+                protocol_version: Some(NATIVE_PROTOCOL_VERSION),
+                host_version: Some(HOST_BUILD_VERSION.into()),
+                extension_version: Some(HOST_BUILD_VERSION.into()),
+                probe_action: Some("transactions".into()),
+                first_page_results: Some(3),
+                category_count: None,
+                recent_activity_count: None,
+            },
+            ReportRenderer::styled(),
+        );
+
+        assert!(output.starts_with(
+            "\x1b[1;38;2;45;174;135mholvi doctor\x1b[0m\n\n\x1b[1;36mConnection\x1b[0m\n"
+        ));
+        assert!(output.contains("\x1b[1;32m✓\x1b[0m"));
+        assert!(output.contains("\x1b[1;90m·\x1b[0m"));
+        assert!(output.contains("\x1b[38;2;150;150;150m3 results on first page\x1b[0m"));
+    }
+
+    #[test]
+    fn renders_failed_doctor_check_in_red() {
+        let output = format_doctor(
+            DoctorResult {
+                connected: false,
+                group_path_segment: "group".into(),
+                pool_handle: "pool".into(),
+                payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
+                capabilities: vec![],
+                protocol_version: Some(NATIVE_PROTOCOL_VERSION),
+                host_version: Some(HOST_BUILD_VERSION.into()),
+                extension_version: Some(HOST_BUILD_VERSION.into()),
+                probe_action: None,
+                first_page_results: None,
+                category_count: None,
+                recent_activity_count: None,
+            },
+            ReportRenderer::styled(),
+        );
+
+        assert!(output.contains("\x1b[1;31m✗\x1b[0m"));
+        assert!(output.contains("\x1b[38;2;150;150;150mdisconnected\x1b[0m"));
+    }
+
+    #[test]
+    fn renders_install_paths_and_next_steps_in_plain_text() {
         let result = InstallResult {
             config_path: "/support/config.json".into(),
             extension_id: "extension-id",
@@ -1004,13 +1185,16 @@ mod tests {
             native_host_manifest: "/chrome/native-host.json".into(),
             host_restart: HostRestartStatus::Requested,
         };
-        let output = format_install(&result);
+        let output = format_install(&result, ReportRenderer::plain());
 
-        assert!(output.starts_with("Installation\n------------\n  ok config file"));
+        assert!(
+            output.starts_with("holvi install\n\nInstallation\n------------\n  ok config file")
+        );
         assert!(output.contains("/support/config.json"));
-        assert!(output.contains("  .. extension id             extension-id\n"));
+        assert!(output.contains("  .. extension id     extension-id\n"));
         assert!(output.contains("Next steps\n----------\n"));
         assert!(output.ends_with("  3. Run holvi doctor.\n"));
+        assert!(!output.contains("\x1b["));
         assert_eq!(
             serde_json::to_value(result).unwrap(),
             json!({
@@ -1021,6 +1205,24 @@ mod tests {
                 "hostRestart": "requested",
             })
         );
+    }
+
+    #[test]
+    fn renders_styled_install_steps() {
+        let result = InstallResult {
+            config_path: "/support/config.json".into(),
+            extension_id: "extension-id",
+            extension_path: "/support/extension".into(),
+            native_host_manifest: "/chrome/native-host.json".into(),
+            host_restart: HostRestartStatus::Requested,
+        };
+        let output = format_install(&result, ReportRenderer::styled());
+
+        assert!(output.contains("\x1b[1;36mNext steps\x1b[0m"));
+        assert!(output.contains("\x1b[1;38;2;45;174;135m1.\x1b[0m"));
+        assert!(output.contains(
+            "\x1b[38;2;150;150;150mIn chrome://extensions, load or reload the unpacked extension.\x1b[0m"
+        ));
     }
 
     #[test]
