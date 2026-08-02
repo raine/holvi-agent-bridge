@@ -1,5 +1,6 @@
 use std::env;
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -13,10 +14,12 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-use crate::capabilities::enabled_actions;
-use crate::config::{config_path, load_config, socket_path, validate_uuid};
+use crate::capabilities::{EnabledActions, enabled_actions};
+use crate::config::{
+    SUPPORTED_CAPABILITIES, config_path, load_config, socket_path, validate_uuid,
+};
 use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
-use crate::install::{InstallOptions, install_bridge};
+use crate::install::{InstallOptions, InstallResult, install_bridge};
 use crate::protocol::{
     Action, AuditListParams, DebtParams, EmptyParams, TransactionParams, UploadParams, sign_request,
 };
@@ -53,9 +56,9 @@ enum Command {
         command: ConfigCommand,
     },
     /// Show enabled capabilities and operations
-    Capabilities,
+    Capabilities(OutputArgs),
     /// Verify the Chrome connection and an API surface
-    Doctor,
+    Doctor(OutputArgs),
     /// List payment-account transactions
     Transactions(TransactionArgs),
     /// Inspect one accounting debt
@@ -121,17 +124,32 @@ struct SkillInstallArgs {
 }
 
 #[derive(Args)]
+struct OutputArgs {
+    /// Print machine-readable JSON
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
 struct InstallArgs {
+    /// Full Holvi company group URL
     #[arg(long)]
     group_url: String,
+    /// Payment account UUID used by the transaction feed
     #[arg(long)]
     account: String,
+    /// Enable a capability (repeatable)
     #[arg(long = "capability", required = true)]
     capabilities: Vec<String>,
+    /// Allow receipt files below this directory (repeatable)
     #[arg(long = "receipt-root")]
     receipt_roots: Vec<PathBuf>,
+    /// Confirm native host registration
     #[arg(long)]
     yes: bool,
+    /// Print machine-readable JSON
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -164,6 +182,20 @@ struct UploadArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct DoctorResult {
+    connected: bool,
+    group_path_segment: String,
+    pool_handle: String,
+    payment_account_uuid: String,
+    capabilities: Vec<String>,
+    probe_action: Option<String>,
+    first_page_results: Option<usize>,
+    category_count: Option<usize>,
+    recent_activity_count: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TransactionResult {
     count: usize,
     pages: usize,
@@ -190,6 +222,7 @@ pub async fn run() -> Result<()> {
         return Ok(());
     };
     if let Command::Install(args) = command {
+        let json_output = args.json;
         let result = install_bridge(InstallOptions {
             confirmed: args.yes,
             group_url: args.group_url,
@@ -197,7 +230,11 @@ pub async fn run() -> Result<()> {
             capabilities: args.capabilities,
             receipt_roots: args.receipt_roots,
         })?;
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            print!("{}", format_install(&result));
+        }
         return Ok(());
     }
     if let Command::Skill(args) = command {
@@ -219,17 +256,24 @@ pub async fn run() -> Result<()> {
     let (config, _) = load_config()?;
     match command {
         Command::Install(_) | Command::Skill(_) | Command::Config { .. } => unreachable!(),
-        Command::Capabilities => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
+        Command::Capabilities(args) => {
+            let actions = enabled_actions(&config.capabilities);
+            if args.json {
+                print_json(&json!({
                     "capabilities": config.capabilities,
-                    "operations": enabled_actions(&config.capabilities),
-                }))?
-            );
+                    "operations": actions,
+                }))?;
+            } else {
+                print!("{}", format_capabilities(&config.capabilities, &actions));
+            }
         }
-        Command::Doctor => {
-            print_json(&request_host(&config.hmac_secret, Action::Doctor(EmptyParams {})).await?)?;
+        Command::Doctor(args) => {
+            let result = request_host(&config.hmac_secret, Action::Doctor(EmptyParams {})).await?;
+            if args.json {
+                print_json(&result)?;
+            } else {
+                print!("{}", format_doctor(serde_json::from_value(result)?));
+            }
         }
         Command::Transactions(args) => {
             let from = args.from.unwrap_or_default();
@@ -435,6 +479,156 @@ async fn request_host(secret: &str, action: Action) -> Result<Value> {
     Ok(response)
 }
 
+fn write_heading(output: &mut String, title: &str) {
+    writeln!(output, "{title}").unwrap();
+    writeln!(output, "{}", "-".repeat(title.chars().count())).unwrap();
+}
+
+fn write_status(output: &mut String, marker: &str, label: &str, value: &str) {
+    writeln!(output, "  {marker:<2} {label:<24} {value}").unwrap();
+}
+
+fn format_install(result: &InstallResult) -> String {
+    let mut output = String::new();
+    write_heading(&mut output, "Installation");
+    write_status(
+        &mut output,
+        "ok",
+        "config file",
+        &result.config_path.to_string_lossy(),
+    );
+    write_status(
+        &mut output,
+        "ok",
+        "extension files",
+        &result.extension_path.to_string_lossy(),
+    );
+    write_status(&mut output, "..", "extension id", result.extension_id);
+    write_status(
+        &mut output,
+        "ok",
+        "native host",
+        &result.native_host_manifest.to_string_lossy(),
+    );
+    output.push('\n');
+    write_heading(&mut output, "Next steps");
+    writeln!(
+        output,
+        "  1. In chrome://extensions, load or reload the unpacked extension."
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "  2. Open or reload the configured Holvi group tab."
+    )
+    .unwrap();
+    writeln!(output, "  3. Run holvi doctor.").unwrap();
+    output
+}
+
+fn format_capabilities(capabilities: &[String], actions: &EnabledActions) -> String {
+    let mut output = String::new();
+    write_heading(&mut output, "Capabilities");
+    for capability in SUPPORTED_CAPABILITIES {
+        let enabled = capabilities.iter().any(|item| item == capability);
+        write_status(
+            &mut output,
+            if enabled { "ok" } else { "--" },
+            capability,
+            if enabled { "enabled" } else { "disabled" },
+        );
+    }
+    output.push('\n');
+    write_heading(&mut output, "Operations");
+    for (action, enabled) in actions.iter() {
+        write_status(
+            &mut output,
+            if enabled { "ok" } else { "--" },
+            action,
+            if enabled { "enabled" } else { "disabled" },
+        );
+    }
+    output
+}
+
+fn count_label(count: usize, singular: &str, plural: &str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
+}
+
+fn format_doctor(doctor: DoctorResult) -> String {
+    let mut output = String::new();
+    write_heading(&mut output, "Connection");
+    write_status(
+        &mut output,
+        if doctor.connected { "ok" } else { "--" },
+        "Chrome bridge",
+        if doctor.connected {
+            "connected"
+        } else {
+            "disconnected"
+        },
+    );
+    write_status(&mut output, "ok", "Holvi session", "authenticated");
+
+    output.push('\n');
+    write_heading(&mut output, "Account");
+    write_status(&mut output, "..", "group", &doctor.group_path_segment);
+    write_status(&mut output, "..", "pool", &doctor.pool_handle);
+    write_status(
+        &mut output,
+        "..",
+        "payment account",
+        &doctor.payment_account_uuid,
+    );
+
+    output.push('\n');
+    write_heading(&mut output, "Capabilities");
+    for capability in doctor.capabilities {
+        write_status(&mut output, "ok", &capability, "enabled");
+    }
+
+    output.push('\n');
+    write_heading(&mut output, "API probe");
+    match doctor.probe_action.as_deref() {
+        Some("transactions") => write_status(
+            &mut output,
+            "ok",
+            "transactions",
+            &format!(
+                "{} on first page",
+                count_label(
+                    doctor.first_page_results.unwrap_or_default(),
+                    "result",
+                    "results"
+                )
+            ),
+        ),
+        Some("bookkeeping.categories") => write_status(
+            &mut output,
+            "ok",
+            "bookkeeping categories",
+            &count_label(
+                doctor.category_count.unwrap_or_default(),
+                "category",
+                "categories",
+            ),
+        ),
+        Some("audit.list") => write_status(
+            &mut output,
+            "ok",
+            "audit activity",
+            &count_label(
+                doctor.recent_activity_count.unwrap_or_default(),
+                "result",
+                "results",
+            ),
+        ),
+        Some(action) => write_status(&mut output, "ok", action, "completed"),
+        None => write_status(&mut output, "..", "API probe", "read capability required"),
+    }
+    output
+}
+
 fn print_json(value: &Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
@@ -625,6 +819,117 @@ mod tests {
             vec![CodingAgentArg::Claude, CodingAgentArg::Codex]
         );
         assert!(Cli::try_parse_from(["holvi", "skill", "install", "--agent", "unknown"]).is_err());
+    }
+
+    #[test]
+    fn renders_capabilities_as_a_scannable_status_report() {
+        let configured = vec!["transactions.read".into(), "attachments.write".into()];
+        let output = format_capabilities(&configured, &enabled_actions(&configured));
+
+        assert_eq!(
+            output,
+            concat!(
+                "Capabilities\n",
+                "------------\n",
+                "  ok transactions.read        enabled\n",
+                "  ok attachments.write        enabled\n",
+                "  -- bookkeeping.read         disabled\n",
+                "  -- audit.read               disabled\n",
+                "\n",
+                "Operations\n",
+                "----------\n",
+                "  ok doctor                   enabled\n",
+                "  ok transactions             enabled\n",
+                "  ok preview                  enabled\n",
+                "  ok upload                   enabled\n",
+                "  -- bookkeeping.get          disabled\n",
+                "  -- bookkeeping.categories   disabled\n",
+                "  -- bookkeeping.suggestions  disabled\n",
+                "  -- audit.list               disabled\n",
+            )
+        );
+    }
+
+    #[test]
+    fn renders_doctor_connection_scope_and_probe() {
+        let output = format_doctor(DoctorResult {
+            connected: true,
+            group_path_segment: "AbC123+example-company".into(),
+            pool_handle: "example-company".into(),
+            payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
+            capabilities: vec!["transactions.read".into()],
+            probe_action: Some("transactions".into()),
+            first_page_results: Some(3),
+            category_count: None,
+            recent_activity_count: None,
+        });
+
+        assert!(
+            output.contains("Connection\n----------\n  ok Chrome bridge            connected\n")
+        );
+        assert!(output.contains("Account\n-------\n  .. group"));
+        assert!(output.contains("AbC123+example-company"));
+        assert!(output.contains("API probe\n---------\n  ok transactions"));
+        assert!(output.contains("3 results on first page"));
+    }
+
+    #[test]
+    fn renders_install_paths_and_next_steps() {
+        let result = InstallResult {
+            config_path: "/support/config.json".into(),
+            extension_id: "extension-id",
+            extension_path: "/support/extension".into(),
+            native_host_manifest: "/chrome/native-host.json".into(),
+        };
+        let output = format_install(&result);
+
+        assert!(output.starts_with("Installation\n------------\n  ok config file"));
+        assert!(output.contains("/support/config.json"));
+        assert!(output.contains("  .. extension id             extension-id\n"));
+        assert!(output.contains("Next steps\n----------\n"));
+        assert!(output.ends_with("  3. Run holvi doctor.\n"));
+        assert_eq!(
+            serde_json::to_value(result).unwrap(),
+            json!({
+                "configPath": "/support/config.json",
+                "extensionId": "extension-id",
+                "extensionPath": "/support/extension",
+                "nativeHostManifest": "/chrome/native-host.json",
+            })
+        );
+    }
+
+    #[test]
+    fn parses_json_output_for_human_facing_reports() {
+        let capabilities = Cli::try_parse_from(["holvi", "capabilities", "--json"]).unwrap();
+        assert!(matches!(
+            capabilities.command,
+            Some(Command::Capabilities(OutputArgs { json: true }))
+        ));
+
+        let doctor = Cli::try_parse_from(["holvi", "doctor", "--json"]).unwrap();
+        assert!(matches!(
+            doctor.command,
+            Some(Command::Doctor(OutputArgs { json: true }))
+        ));
+
+        let install = Cli::try_parse_from([
+            "holvi",
+            "install",
+            "--group-url",
+            "https://account.app.holvi.com/group/AbC123+example/",
+            "--account",
+            "11111111-1111-4111-8111-111111111111",
+            "--capability",
+            "transactions.read",
+            "--yes",
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            install.command,
+            Some(Command::Install(InstallArgs { json: true, .. }))
+        ));
     }
 
     #[test]

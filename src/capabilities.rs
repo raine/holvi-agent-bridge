@@ -29,11 +29,14 @@ pub fn required_capabilities(action: &Action) -> &'static [&'static str] {
 pub struct EnabledActions(Vec<(&'static str, bool)>);
 
 impl EnabledActions {
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, bool)> + '_ {
+        self.0.iter().copied()
+    }
+
     #[cfg(test)]
     fn get(&self, action: &str) -> Option<bool> {
-        self.0
-            .iter()
-            .find_map(|(name, enabled)| (*name == action).then_some(*enabled))
+        self.iter()
+            .find_map(|(name, enabled)| (name == action).then_some(enabled))
     }
 }
 

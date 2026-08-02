@@ -109,13 +109,13 @@ holvi install \
 ```
 
 The `holvi install` command prepares both parts of the bridge. Complete the
-browser setup using the paths in its JSON output:
+browser setup using the paths in its completion report:
 
-1. Find `extensionPath` in the output. This is the unpacked extension directory
-   containing `manifest.json`.
+1. Find the `extension files` path in the report. This is the unpacked extension
+   directory containing `manifest.json`.
 2. Open `chrome://extensions` in Google Chrome.
 3. Enable **Developer mode**.
-4. Choose **Load unpacked** and select the exact `extensionPath` directory.
+4. Choose **Load unpacked** and select the exact `extension files` directory.
 5. Confirm that Chrome displays extension ID
    `oeedcemphbobfehfmcllmjhhhjgahgeb`.
 6. Reload the signed-in Holvi group tab.
@@ -263,7 +263,8 @@ holvi install \
   --capability CAPABILITY \
   [--capability CAPABILITY] \
   [--receipt-root /absolute/path] \
-  --yes
+  --yes \
+  [--json]
 ```
 
 | Option                    | Required | Description                                         |
@@ -273,10 +274,12 @@ holvi install \
 | `--capability CAPABILITY` | yes      | Capability to enable, repeatable                    |
 | `--receipt-root PATH`     | no       | Approved absolute attachment directory, repeatable  |
 | `--yes`                   | yes      | Confirm registration of the Chrome native host      |
+| `--json`                  | no       | Print the installation result as JSON               |
 
-`attachments.write` requires at least one receipt root. The command prints the
-config path, stable extension ID, unpacked extension path, and native host
-manifest path as JSON.
+`attachments.write` requires at least one receipt root. The default completion
+report shows the config path, stable extension ID, unpacked extension path,
+native host manifest path, and next steps. Use `--json` for the same installation
+paths in a machine-readable object.
 
 ### `holvi skill`
 
@@ -338,16 +341,17 @@ platform path described in [Local files](#local-files).
 
 ### `holvi capabilities`
 
-Prints the configured capability list and every known operation as JSON. An
-operation value is `true` only when all of its required capabilities are
-enabled.
+Prints a status report for every supported capability and known operation. An
+operation is enabled only when all of its required capabilities are enabled.
 
 ```sh
-holvi capabilities
+holvi capabilities [--json]
 ```
 
-This command reads and validates the private config but does not connect to
-Chrome or Holvi.
+The default report uses aligned status rows for quick terminal scanning. Use
+`--json` to print the configured capability list and operation status map for
+scripts. This command reads and validates the private config but does not connect
+to Chrome or Holvi.
 
 ### `holvi doctor`
 
@@ -355,13 +359,15 @@ Verifies config loading, Native Messaging, the configured Holvi tab, session
 authentication, and one API probe selected from enabled capabilities.
 
 ```sh
-holvi doctor
+holvi doctor [--json]
 ```
 
 Probe priority is transactions, bookkeeping categories, then audit activity. A
-write-only capability set verifies authentication and reports a null probe. The
-JSON result identifies the selected `probeAction` and includes account scope and
-capability metadata.
+write-only capability set verifies authentication and reports that an API probe
+requires a read capability. The default report groups connection, account,
+capability, and probe status into aligned terminal sections. Use `--json` for the
+machine-readable result, including `probeAction`, account scope, and capability
+metadata.
 
 ### `holvi transactions`
 

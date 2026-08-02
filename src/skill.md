@@ -11,6 +11,8 @@ for Holvi work. Authentication stays inside Chrome.
 - Keep the configured Holvi group open and signed in in Chrome. Run
   `holvi doctor` when the connection, account scope, or session is unclear.
 - Run `holvi <command> --help` when you need flags not shown here.
+- Human-readable output is the default for `capabilities`, `doctor`, and a
+  successful `install`. Use `--json` when a structured result is required.
 - Do not run `holvi install` or change capabilities, account scope, or receipt
   roots unless the user explicitly asks for that configuration change.
 

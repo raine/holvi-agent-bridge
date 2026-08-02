@@ -45,10 +45,10 @@ pub struct InstallOptions {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallResult {
-    config_path: PathBuf,
-    extension_id: &'static str,
-    extension_path: PathBuf,
-    native_host_manifest: PathBuf,
+    pub(crate) config_path: PathBuf,
+    pub(crate) extension_id: &'static str,
+    pub(crate) extension_path: PathBuf,
+    pub(crate) native_host_manifest: PathBuf,
 }
 
 pub fn install_bridge(options: InstallOptions) -> Result<InstallResult> {
