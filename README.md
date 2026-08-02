@@ -8,8 +8,31 @@ does not need to navigate through the Holvi site. The bridge exposes named
 operations instead of arbitrary authenticated HTTP requests, so each Holvi area
 can be approved independently.
 
-Receipt handling is the first workflow built on the bridge. It is not the
-boundary of the project.
+## How it works
+
+```mermaid
+sequenceDiagram
+    participant Agent as Local agent
+    participant CLI as holvi CLI
+    participant Host as Native host
+    participant Extension as Browser extension
+    participant Tab as Signed-in Holvi tab
+    participant API as Holvi API
+
+    Agent->>CLI: Named operation
+    CLI->>Host: Authenticated local request
+    Host->>Extension: Native message
+    Extension->>Tab: Request session authentication
+    Tab-->>Extension: Session authentication
+    Extension->>API: Account-scoped request
+    API-->>Extension: Response
+    Extension-->>Host: Projected result
+    Host-->>CLI: Result
+    CLI-->>Agent: Output
+```
+
+Your Holvi sign-in stays in the browser, and the agent can use only the features
+you enable.
 
 ## Features
 
@@ -28,7 +51,8 @@ boundary of the project.
 Runtime requirements:
 
 - macOS or Linux
-- Google Chrome
+- Google Chrome, Brave, or another Chromium-based browser with native messaging
+  support
 - a Holvi account with access to the target company
 
 Building from source requires Rust 1.85 or later. Extension development also
