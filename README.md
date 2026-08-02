@@ -10,23 +10,18 @@ so you can choose which parts of Holvi the agent may use.
 ## How it works
 
 ```mermaid
-flowchart LR
-    Agent["Local agent"] -->|"Named holvi command"| CLI["holvi CLI"]
-    Config["Private config<br/>Account, capabilities,<br/>receipt roots, HMAC secret"] --> CLI
-    CLI -->|"HMAC-signed request<br/>Owner-only Unix socket"| Host["Native host<br/>Authenticates request<br/>Checks capability"]
-    Config --> Host
-    Receipt["Approved receipt file"] -->|"Upload only"| Host
-    Host -->|"Chromium native messaging"| Extension["Extension service worker<br/>Checks capability and account scope"]
-    Tab["Signed-in Holvi group tab<br/>Content script"] -->|"Session authentication on demand"| Extension
-    Extension -->|"Account-scoped API request"| API["Holvi API"]
-    API -->|"Response"| Extension
-    Extension -->|"Projected data or verified upload result"| Host
-    Host --> CLI
-    CLI --> Agent
+flowchart TD
+    Agent["Local agent"] -->|"Named operation"| CLI["holvi CLI"]
+    CLI -->|"Authenticated local request"| Host["Native host"]
+    Host -->|"Native messaging"| Extension["Browser extension"]
+    Tab["Signed-in Holvi tab"] -->|"Session authentication"| Extension
+    Extension -->|"Account-scoped request"| API["Holvi API"]
 ```
 
 Your Holvi sign-in stays in the browser, and the agent can use only the features
-you enable.
+you enable. Responses return along the same path. The native host and browser
+extension both check capabilities, and the extension returns projected data
+rather than raw API responses.
 
 ## Features
 
