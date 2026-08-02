@@ -8,9 +8,9 @@ interface HolviBridgeStaticConfig {
   maxScanResults: number;
 }
 
-var HOLVI_AGENT_BRIDGE_STATIC_CONFIG: HolviBridgeStaticConfig;
+var _HOLVI_AGENT_BRIDGE_STATIC_CONFIG: HolviBridgeStaticConfig;
 
-HOLVI_AGENT_BRIDGE_STATIC_CONFIG = Object.freeze({
+_HOLVI_AGENT_BRIDGE_STATIC_CONFIG = Object.freeze({
   accountOrigin: "https://account.app.holvi.com",
   apiOrigin: "https://holvi.com",
   groupPathPrefix: "/group/",

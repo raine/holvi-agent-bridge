@@ -9,7 +9,9 @@ export const ACTION_CAPABILITIES = {
 
 export type BridgeAction = keyof typeof ACTION_CAPABILITIES;
 
-export function requiredCapabilities(action: string): readonly Capability[] | null {
+export function requiredCapabilities(
+  action: string,
+): readonly Capability[] | null {
   if (!Object.hasOwn(ACTION_CAPABILITIES, action)) {
     return null;
   }

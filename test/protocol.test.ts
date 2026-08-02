@@ -16,7 +16,9 @@ test("native message decoder accepts fragmented frames", () => {
 
   assert.deepEqual(decoder.push(frame.subarray(0, 2)), []);
   assert.deepEqual(decoder.push(frame.subarray(2, 7)), []);
-  assert.deepEqual(decoder.push(frame.subarray(7)), [{ type: "result", ok: true }]);
+  assert.deepEqual(decoder.push(frame.subarray(7)), [
+    { type: "result", ok: true },
+  ]);
 });
 
 test("signed local requests authenticate once", () => {
@@ -38,13 +40,13 @@ test("signed local requests authenticate once", () => {
 });
 
 test("signed local requests reject tampering and expiration", () => {
-  const request = signRequest(secret, "preview", { transactionUuid: "one" });
+  const request = signRequest(secret, "preview", { debtUuid: "one" });
 
   assert.throws(
     () =>
       verifyRequest(
         secret,
-        { ...request, params: { transactionUuid: "two" } },
+        { ...request, params: { debtUuid: "two" } },
         new Map(),
       ),
     /authentication failed/,

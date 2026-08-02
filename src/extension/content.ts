@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const config = HOLVI_AGENT_BRIDGE_STATIC_CONFIG;
+  const config = _HOLVI_AGENT_BRIDGE_STATIC_CONFIG;
   if (
     location.origin !== config.accountOrigin ||
     !location.pathname.startsWith(config.groupPathPrefix)

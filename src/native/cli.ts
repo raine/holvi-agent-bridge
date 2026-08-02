@@ -27,7 +27,8 @@ interface ScanRow {
   description?: string;
   amount?: string | number | null;
   currency?: string;
-  transactionUuid?: string;
+  paymentUuid?: string;
+  debtUuid?: string | null;
 }
 
 interface ScanResult {
@@ -45,9 +46,9 @@ Usage:
   holvi-agent-bridge capabilities
   holvi-agent-bridge doctor
   holvi-agent-bridge scan [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--json]
-  holvi-agent-bridge preview --transaction UUID
-  holvi-agent-bridge upload --transaction UUID --file /absolute/path/to/receipt.pdf
-  holvi-agent-bridge upload --transaction UUID --file /absolute/path/to/receipt.pdf --yes
+  holvi-agent-bridge preview --debt UUID
+  holvi-agent-bridge upload --debt UUID --file /absolute/path/to/receipt.pdf
+  holvi-agent-bridge upload --debt UUID --file /absolute/path/to/receipt.pdf --yes
 
 Every command requires its configured capability. Upload is a dry check unless
 --yes is present. The configured signed-in Holvi group tab must remain open in
@@ -120,7 +121,10 @@ function validateDate(value: string, name: string): string {
     throw new Error(`--${name} must use YYYY-MM-DD.`);
   }
   const parsed = new Date(`${value}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
     throw new Error(`--${name} must be a calendar date.`);
   }
   return value;
@@ -144,7 +148,9 @@ async function requestHost<T>(
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error("Open or reload the configured signed-in Holvi tab in Chrome.");
+      throw new Error(
+        "Open or reload the configured signed-in Holvi tab in Chrome.",
+      );
     }
     throw error;
   }
@@ -182,7 +188,9 @@ async function requestHost<T>(
         };
         if (!response.ok) {
           settle(() =>
-            reject(new Error(response.error || "Holvi Agent Bridge request failed.")),
+            reject(
+              new Error(response.error || "Holvi Agent Bridge request failed."),
+            ),
           );
           return;
         }
@@ -195,7 +203,11 @@ async function requestHost<T>(
       settle(() => {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "ENOENT" || code === "ECONNREFUSED") {
-          reject(new Error("Open or reload the configured signed-in Holvi tab in Chrome."));
+          reject(
+            new Error(
+              "Open or reload the configured signed-in Holvi tab in Chrome.",
+            ),
+          );
         } else {
           reject(error);
         }
@@ -205,7 +217,13 @@ async function requestHost<T>(
 }
 
 function formatCell(value: unknown, width: number): string {
-  const valueText = value === null || value === undefined ? "" : String(value);
+  const valueText =
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "bigint" ||
+    typeof value === "boolean"
+      ? String(value)
+      : "";
   return valueText.length > width
     ? `${valueText.slice(0, Math.max(0, width - 1))}…`
     : valueText.padEnd(width);
@@ -213,13 +231,19 @@ function formatCell(value: unknown, width: number): string {
 
 function printScan(scan: ScanResult): void {
   const rows = scan.results || [];
-  const widths = { date: 10, counterparty: 28, amount: 12, currency: 8, uuid: 36 };
+  const widths = {
+    date: 10,
+    counterparty: 28,
+    amount: 12,
+    currency: 8,
+    uuid: 36,
+  };
   const header = [
     formatCell("Date", widths.date),
     formatCell("Counterparty", widths.counterparty),
     formatCell("Amount", widths.amount),
     formatCell("Currency", widths.currency),
-    formatCell("Transaction UUID", widths.uuid),
+    formatCell("Debt UUID", widths.uuid),
   ].join("  ");
   process.stdout.write(`${header}\n`);
   for (const row of rows) {
@@ -229,7 +253,7 @@ function printScan(scan: ScanResult): void {
         formatCell(row.counterparty || row.description, widths.counterparty),
         formatCell(row.amount, widths.amount),
         formatCell(row.currency, widths.currency),
-        formatCell(row.transactionUuid, widths.uuid),
+        formatCell(row.debtUuid || "unavailable", widths.uuid),
       ].join("  ")}\n`,
     );
   }
@@ -308,28 +332,25 @@ async function main(): Promise<void> {
   }
 
   if (command === "preview") {
-    assertOptions(options, ["transaction"]);
-    const transactionUuid = validateUuid(
-      stringOption(options, "transaction"),
-      "Transaction",
-    );
+    assertOptions(options, ["debt"]);
+    const debtUuid = validateUuid(stringOption(options, "debt"), "Debt");
     const result = await requestHost(config.hmacSecret, "preview", {
-      transactionUuid,
+      debtUuid,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
 
   if (command === "upload") {
-    assertOptions(options, ["transaction", "file", "yes"]);
-    const transactionUuid = validateUuid(
-      stringOption(options, "transaction"),
-      "Transaction",
+    assertOptions(options, ["debt", "file", "yes"]);
+    const debtUuid = validateUuid(stringOption(options, "debt"), "Debt");
+    const receipt = await resolveReceiptFile(
+      config,
+      stringOption(options, "file"),
     );
-    const receipt = await resolveReceiptFile(config, stringOption(options, "file"));
     if (options.yes !== true) {
       const preview = await requestHost(config.hmacSecret, "preview", {
-        transactionUuid,
+        debtUuid,
       });
       process.stdout.write(
         `${JSON.stringify(
@@ -346,7 +367,7 @@ async function main(): Promise<void> {
       return;
     }
     const result = await requestHost(config.hmacSecret, "upload", {
-      transactionUuid,
+      debtUuid,
       filePath: receipt.path,
       confirmed: true,
     });

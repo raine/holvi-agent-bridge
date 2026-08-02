@@ -1,0 +1,7 @@
+{
+  "ignorePatterns": ["dist/**", "history/**"],
+  "printWidth": 80,
+  "semi": true,
+  "proseWrap": "always",
+  "sortPackageJson": false
+}

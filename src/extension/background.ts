@@ -1,10 +1,10 @@
+"use strict";
+
 declare function importScripts(...urls: string[]): void;
 
 importScripts("config.js");
 
-"use strict";
-
-const staticConfig = HOLVI_AGENT_BRIDGE_STATIC_CONFIG;
+const staticConfig = _HOLVI_AGENT_BRIDGE_STATIC_CONFIG;
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const requestIdPattern = /^[0-9a-f-]{16,64}$/i;
@@ -63,11 +63,15 @@ interface PaymentRecord {
     counterparty_currency?: unknown;
   } | null;
   attachment_count?: unknown;
+  matches?: Array<{
+    match_type?: unknown;
+    uuid?: unknown;
+  }>;
 }
 
 interface UploadTransfer {
   id: string;
-  transactionUuid: string;
+  debtUuid: string;
   fileName: string;
   mimeType: string;
   size: number;
@@ -82,7 +86,7 @@ interface NativeMessage {
   action?: string;
   params?: Record<string, unknown>;
   config?: unknown;
-  transactionUuid?: string;
+  debtUuid?: string;
   fileName?: string;
   mimeType?: string;
   size?: number;
@@ -114,7 +118,9 @@ function groupPathSegmentFromUrl(value: string): string {
 
 function validateRuntimeConfig(value: unknown): RuntimeBridgeConfig {
   const config = value as Partial<RuntimeBridgeConfig>;
-  const groupParts = (config.groupPathSegment || "").match(/^([^/+]+)\+([^/]+)$/);
+  const groupParts = (config.groupPathSegment || "").match(
+    /^([^/+]+)\+([^/]+)$/,
+  );
   const groupPoolHandle = groupParts?.[1] || "";
   if (
     !groupParts ||
@@ -130,9 +136,22 @@ function validateRuntimeConfig(value: unknown): RuntimeBridgeConfig {
     (config.maxFileBytes || 0) < 1 ||
     (config.maxFileBytes || 0) > staticConfig.maxFileBytes
   ) {
-    throw new Error("The native host supplied an invalid Holvi account boundary.");
+    throw new Error(
+      "The native host supplied an invalid Holvi account boundary.",
+    );
   }
   return config as RuntimeBridgeConfig;
+}
+
+function validUploadFileName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= 255 &&
+    !value.includes("/") &&
+    !value.includes("\\") &&
+    !value.includes("\0")
+  );
 }
 
 function requireCapabilities(...capabilities: string[]): void {
@@ -142,7 +161,9 @@ function requireCapabilities(...capabilities: string[]): void {
       (capability) => !runtimeConfig?.capabilities.includes(capability),
     )
   ) {
-    throw new Error(`Action requires capabilities: ${capabilities.join(", ")}.`);
+    throw new Error(
+      `Action requires capabilities: ${capabilities.join(", ")}.`,
+    );
   }
 }
 
@@ -171,9 +192,7 @@ function reportTabState(): void {
   }
   const tab = configuredTab();
   nativePort.postMessage(
-    tab
-      ? { type: "tab_ready", tabId: tab[0] }
-      : { type: "tab_unavailable" },
+    tab ? { type: "tab_ready", tabId: tab[0] } : { type: "tab_unavailable" },
   );
 }
 
@@ -227,7 +246,9 @@ function requestAuth(): Promise<Auth> {
   return new Promise((resolve, reject) => {
     const timeout = self.setTimeout(() => {
       authRequests.delete(requestId);
-      reject(new Error("The Holvi tab did not provide session authentication."));
+      reject(
+        new Error("The Holvi tab did not provide session authentication."),
+      );
     }, 5000);
 
     authRequests.set(requestId, { resolve, reject, timeout, tabId });
@@ -280,15 +301,24 @@ function handleContentMessage(tabId: number, value: unknown): void {
   if (
     !runtimeConfig ||
     message.origin !== staticConfig.accountOrigin ||
-    groupPathSegmentFromUrl(message.href || "") !== runtimeConfig.groupPathSegment
+    groupPathSegmentFromUrl(message.href || "") !==
+      runtimeConfig.groupPathSegment
   ) {
-    pending.reject(new Error("The bridge tab is outside the configured Holvi group."));
+    pending.reject(
+      new Error("The bridge tab is outside the configured Holvi group."),
+    );
     return;
   }
 
   const token = typeof message.token === "string" ? message.token : "";
-  if (token.length < 32 || token.length > 8192 || token.split(".").length !== 3) {
-    pending.reject(new Error("Sign in to Holvi or reload the configured group tab."));
+  if (
+    token.length < 32 ||
+    token.length > 8192 ||
+    token.split(".").length !== 3
+  ) {
+    pending.reject(
+      new Error("Sign in to Holvi or reload the configured group tab."),
+    );
     return;
   }
 
@@ -314,7 +344,9 @@ chrome.runtime.onConnect.addListener((port) => {
   const validTabId = tabId as number;
   tabConnections.get(validTabId)?.port.disconnect();
   tabConnections.set(validTabId, { port, href, groupPathSegment });
-  port.onMessage.addListener((message) => handleContentMessage(validTabId, message));
+  port.onMessage.addListener((message) =>
+    handleContentMessage(validTabId, message),
+  );
   port.onDisconnect.addListener(() => {
     if (tabConnections.get(validTabId)?.port === port) {
       tabConnections.delete(validTabId);
@@ -344,7 +376,9 @@ async function apiRequest(
   options: RequestInit = {},
 ): Promise<unknown> {
   if (!apiPath.startsWith(configuredApiRoot())) {
-    throw new Error("Refused an API path outside the configured Holvi account.");
+    throw new Error(
+      "Refused an API path outside the configured Holvi account.",
+    );
   }
 
   const headers = new Headers(options.headers || {});
@@ -397,8 +431,16 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function directDebtUuid(payment: PaymentRecord): string | null {
+  const directMatch = Array.isArray(payment.matches)
+    ? payment.matches.find((match) => match?.match_type === "direct")
+    : undefined;
+  const uuid = asString(directMatch?.uuid);
+  return uuidPattern.test(uuid) ? uuid : null;
+}
+
 function projectPayment(payment: PaymentRecord): Record<string, unknown> {
-  const transactionUuid = validateTransactionUuid(asString(payment.uuid));
+  const paymentUuid = validateUuid(asString(payment.uuid), "payment");
   const timestamp = asString(payment.ux_timestamp);
   const counterparty =
     asString(payment.counterparty?.display_name) ||
@@ -411,7 +453,8 @@ function projectPayment(payment: PaymentRecord): Record<string, unknown> {
   const originalCurrency = payment.fx_meta?.counterparty_currency ?? null;
 
   return {
-    transactionUuid,
+    paymentUuid,
+    debtUuid: directDebtUuid(payment),
     date: timestamp.slice(0, 10),
     timestamp,
     counterparty,
@@ -451,17 +494,16 @@ async function scanMissing(
 
   do {
     const page = (await apiRequest(auth, feedPath(cursor))) as FeedPage;
-    if (!Array.isArray(page?.results) || typeof page?.pagination?.has_more !== "boolean") {
+    if (
+      !Array.isArray(page?.results) ||
+      typeof page?.pagination?.has_more !== "boolean"
+    ) {
       throw new Error("Holvi returned an unexpected payments feed shape.");
     }
     for (const item of page.results) {
       const projected = projectPayment(item);
       if (
-        withinDateRange(
-          projected,
-          asString(params.from),
-          asString(params.to),
-        )
+        withinDateRange(projected, asString(params.from), asString(params.to))
       ) {
         results.push(projected);
       }
@@ -487,9 +529,9 @@ async function scanMissing(
   return { pages, count: results.length, results };
 }
 
-function validateTransactionUuid(value: string): string {
+function validateUuid(value: string, resource: string): string {
   if (!uuidPattern.test(value || "")) {
-    throw new Error("A valid Holvi transaction UUID is required.");
+    throw new Error(`A valid Holvi ${resource} UUID is required.`);
   }
   return value;
 }
@@ -511,18 +553,18 @@ function attachmentCount(debt: DebtRecord): number {
   return Array.isArray(debt?.attachments) ? debt.attachments.length : 0;
 }
 
-function debtPath(transactionUuid: string): string {
+function debtPath(debtUuid: string): string {
   return `${configuredApiRoot()}debt/${encodeURIComponent(
-    validateTransactionUuid(transactionUuid),
+    validateUuid(debtUuid, "debt"),
   )}/`;
 }
 
 function projectDebt(
   debt: DebtRecord,
-  transactionUuid: string,
+  debtUuid: string,
 ): Record<string, unknown> {
   return {
-    transactionUuid,
+    debtUuid,
     code: asString(debt?.code),
     counterparty:
       asString(debt?.counterparty_name) || asString(debt?.merchant?.name),
@@ -536,9 +578,9 @@ function projectDebt(
 
 async function previewDebt(
   auth: Auth,
-  transactionUuid: string,
+  debtUuid: string,
 ): Promise<Record<string, unknown>> {
-  const validUuid = validateTransactionUuid(transactionUuid);
+  const validUuid = validateUuid(debtUuid, "debt");
   const debt = (await apiRequest(auth, debtPath(validUuid))) as DebtRecord;
   return projectDebt(debt, validUuid);
 }
@@ -553,7 +595,9 @@ function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
 }
 
 function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
 }
 
 async function uploadReceipt(
@@ -561,8 +605,8 @@ async function uploadReceipt(
   upload: UploadTransfer,
 ): Promise<Record<string, unknown>> {
   requireCapabilities("transactions.read", "attachments.write");
-  const transactionUuid = validateTransactionUuid(upload.transactionUuid);
-  const before = (await apiRequest(auth, debtPath(transactionUuid))) as DebtRecord;
+  const debtUuid = validateUuid(upload.debtUuid, "debt");
+  const before = (await apiRequest(auth, debtPath(debtUuid))) as DebtRecord;
   const beforeCount = attachmentCount(before);
   if (beforeCount !== 0) {
     throw new Error(
@@ -570,16 +614,22 @@ async function uploadReceipt(
     );
   }
   if (typeof before?.code !== "string" || !before.code) {
-    throw new Error("Holvi did not return the object code required for upload.");
+    throw new Error(
+      "Holvi did not return the object code required for upload.",
+    );
   }
 
   const bytes = base64ToBytes(upload.chunks.join(""));
   if (bytes.byteLength !== upload.size) {
-    throw new Error("Receipt byte count changed during native messaging transfer.");
+    throw new Error(
+      "Receipt byte count changed during native messaging transfer.",
+    );
   }
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   if (bytesToHex(new Uint8Array(digest)) !== upload.sha256) {
-    throw new Error("Receipt checksum changed during native messaging transfer.");
+    throw new Error(
+      "Receipt checksum changed during native messaging transfer.",
+    );
   }
 
   const form = new FormData();
@@ -600,7 +650,7 @@ async function uploadReceipt(
     if (delay) {
       await new Promise((resolve) => self.setTimeout(resolve, delay));
     }
-    after = (await apiRequest(auth, debtPath(transactionUuid))) as DebtRecord;
+    after = (await apiRequest(auth, debtPath(debtUuid))) as DebtRecord;
     if (attachmentCount(after) > 0) {
       break;
     }
@@ -614,7 +664,7 @@ async function uploadReceipt(
   }
 
   return {
-    transactionUuid,
+    debtUuid,
     fileName: upload.fileName,
     sha256: upload.sha256,
     attachmentCountBefore: beforeCount,
@@ -634,13 +684,15 @@ async function handleCommand(message: NativeMessage): Promise<unknown> {
         poolHandle: runtimeConfig?.poolHandle,
         paymentAccountUuid: runtimeConfig?.paymentAccountUuid,
         capabilities: runtimeConfig?.capabilities,
-        firstPageResults: Array.isArray(page?.results) ? page.results.length : 0,
+        firstPageResults: Array.isArray(page?.results)
+          ? page.results.length
+          : 0,
       };
     }
     case "scan":
       return scanMissing(auth, message.params || {});
     case "preview":
-      return previewDebt(auth, asString(message.params?.transactionUuid));
+      return previewDebt(auth, asString(message.params?.debtUuid));
     default:
       throw new Error("The local helper requested an unsupported action.");
   }
@@ -667,7 +719,7 @@ function handleNativeMessage(value: unknown): void {
     try {
       runtimeConfig = validateRuntimeConfig(message.config);
       reportTabState();
-    } catch (error) {
+    } catch (_error) {
       nativePort?.disconnect();
     }
     return;
@@ -690,7 +742,7 @@ function handleNativeMessage(value: unknown): void {
       if (activeUpload) {
         throw new Error("Another receipt upload is active.");
       }
-      const transactionUuid = validateTransactionUuid(message.transactionUuid || "");
+      const debtUuid = validateUuid(message.debtUuid || "", "debt");
       if (
         !Number.isSafeInteger(message.size) ||
         (message.size || 0) < 1 ||
@@ -698,7 +750,9 @@ function handleNativeMessage(value: unknown): void {
       ) {
         throw new Error("Receipt size is outside the configured limit.");
       }
-      const expectedChunks = Math.ceil((message.size as number) / fileChunkBytes);
+      const expectedChunks = Math.ceil(
+        (message.size as number) / fileChunkBytes,
+      );
       if (message.chunkCount !== expectedChunks) {
         throw new Error("Receipt chunk count does not match its size.");
       }
@@ -706,15 +760,14 @@ function handleNativeMessage(value: unknown): void {
         throw new Error("Receipt checksum is invalid.");
       }
       if (
-        typeof message.fileName !== "string" ||
-        !/^[^/\\\0]{1,255}$/.test(message.fileName) ||
+        !validUploadFileName(message.fileName) ||
         !uploadMimeTypes.has(message.mimeType || "")
       ) {
         throw new Error("Receipt filename or media type is invalid.");
       }
       activeUpload = {
         id,
-        transactionUuid,
+        debtUuid,
         fileName: message.fileName,
         mimeType: message.mimeType as string,
         size: message.size as number,
@@ -742,7 +795,9 @@ function handleNativeMessage(value: unknown): void {
       postResult(
         failedId,
         false,
-        new Error("Receipt chunks arrived out of order or exceeded their limit."),
+        new Error(
+          "Receipt chunks arrived out of order or exceeded their limit.",
+        ),
       );
       return;
     }

@@ -52,7 +52,9 @@ export class NativeMessageDecoder {
   }
 }
 
-function requestPayload(request: SignedBridgeRequest | BridgeRequest): BridgeRequest {
+function requestPayload(
+  request: SignedBridgeRequest | BridgeRequest,
+): BridgeRequest {
   return {
     version: request.version,
     id: request.id,
@@ -119,7 +121,10 @@ export function verifyRequest(
   const signed = request as SignedBridgeRequest;
   const expected = Buffer.from(requestMac(secret, signed), "hex");
   const supplied = Buffer.from(signed.mac, "hex");
-  if (expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
+  if (
+    expected.length !== supplied.length ||
+    !crypto.timingSafeEqual(expected, supplied)
+  ) {
     throw new Error("Local bridge request authentication failed.");
   }
 

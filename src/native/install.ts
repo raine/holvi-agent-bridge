@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 
 import crypto from "node:crypto";
-import { chmod, lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +40,9 @@ function shellQuote(value: string): string {
 
 async function writePrivateJson(target: string, value: unknown): Promise<void> {
   const temporary = `${target}.tmp-${process.pid}`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
+    mode: 0o600,
+  });
   await chmod(temporary, 0o600);
   await rename(temporary, target);
 }
@@ -50,7 +59,8 @@ function chromeManifestDirectory(): string {
     );
   }
   if (process.platform === "linux") {
-    const configRoot = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+    const configRoot =
+      process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
     return path.join(configRoot, "google-chrome", "NativeMessagingHosts");
   }
   throw new Error("The installer supports Google Chrome on macOS and Linux.");
@@ -84,7 +94,9 @@ export async function installBridge(options: InstallOptions): Promise<{
   nativeHostManifest: string;
 }> {
   if (!options.confirmed) {
-    throw new Error("Installation requires --yes because it registers a Chrome native host.");
+    throw new Error(
+      "Installation requires --yes because it registers a Chrome native host.",
+    );
   }
   if (!Array.isArray(options.capabilities) || options.capabilities.length < 1) {
     throw new Error("Installation requires at least one --capability.");
@@ -113,10 +125,14 @@ export async function installBridge(options: InstallOptions): Promise<{
     "Payment account",
   );
   const receiptRoots = [
-    ...new Set(await Promise.all((options.receiptRoots || []).map(resolveReceiptRoot))),
+    ...new Set(
+      await Promise.all((options.receiptRoots || []).map(resolveReceiptRoot)),
+    ),
   ];
 
-  const projectRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
+  const projectRoot = path.resolve(
+    fileURLToPath(new URL("../..", import.meta.url)),
+  );
   const extensionPath = path.join(projectRoot, "dist", "extension");
   const hostScript = path.join(projectRoot, "dist", "native", "host.js");
   const configPath = defaultConfigPath();
@@ -130,7 +146,8 @@ export async function installBridge(options: InstallOptions): Promise<{
   await mkdir(manifestDirectory, { recursive: true });
 
   const hmacSecret =
-    (await reusableSecret(configPath)) || crypto.randomBytes(32).toString("hex");
+    (await reusableSecret(configPath)) ||
+    crypto.randomBytes(32).toString("hex");
   const config: BridgeConfig = {
     version: 2,
     groupPathSegment,

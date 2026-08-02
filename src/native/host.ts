@@ -46,7 +46,9 @@ function writeNative(message: unknown): Promise<void> {
   writeChain = writeChain.then(
     () =>
       new Promise<void>((resolve, reject) => {
-        process.stdout.write(frame, (error) => (error ? reject(error) : resolve()));
+        process.stdout.write(frame, (error) =>
+          error ? reject(error) : resolve(),
+        );
       }),
   );
   return writeChain;
@@ -99,7 +101,9 @@ function handleNativeMessage(value: unknown): void {
         ? { ok: true, data: message.data }
         : {
             ok: false,
-            error: String(message.error || "Holvi Agent Bridge request failed."),
+            error: errorMessage(
+              message.error ?? "Holvi Agent Bridge request failed.",
+            ),
           },
     );
   }
@@ -137,7 +141,9 @@ async function prepareSocket(target: string): Promise<void> {
       throw new Error(`Refused to replace a non-socket path: ${target}`);
     }
     if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
-      throw new Error(`Refused to replace a socket owned by another user: ${target}`);
+      throw new Error(
+        `Refused to replace a socket owned by another user: ${target}`,
+      );
     }
     if (await socketIsActive(target)) {
       throw new Error("Another Holvi Agent Bridge native host is active.");
@@ -154,10 +160,11 @@ async function sendUpload(
   request: BridgeRequest,
   config: BridgeConfig,
 ): Promise<void> {
-  const filePath = String(request.params.filePath || "");
-  const transactionUuid = validateUuid(
-    String(request.params.transactionUuid || ""),
-    "Transaction",
+  const filePath =
+    typeof request.params.filePath === "string" ? request.params.filePath : "";
+  const debtUuid = validateUuid(
+    typeof request.params.debtUuid === "string" ? request.params.debtUuid : "",
+    "Debt",
   );
   const receipt = await resolveReceiptFile(config, filePath);
   const bytes = await readFile(receipt.path);
@@ -167,7 +174,7 @@ async function sendUpload(
   await writeNative({
     type: "upload_start",
     id: request.id,
-    transactionUuid,
+    debtUuid,
     fileName: receipt.fileName,
     mimeType: receipt.mimeType,
     size: bytes.length,
@@ -177,7 +184,9 @@ async function sendUpload(
 
   for (let index = 0; index < chunkCount; index += 1) {
     const start = index * FILE_CHUNK_BYTES;
-    const data = bytes.subarray(start, start + FILE_CHUNK_BYTES).toString("base64");
+    const data = bytes
+      .subarray(start, start + FILE_CHUNK_BYTES)
+      .toString("base64");
     await writeNative({ type: "upload_chunk", id: request.id, index, data });
   }
   await writeNative({ type: "upload_end", id: request.id });
@@ -201,7 +210,9 @@ async function dispatchRequest(
     );
   }
   if (!tabReady) {
-    throw new Error("Open or reload the configured signed-in Holvi group tab in Chrome.");
+    throw new Error(
+      "Open or reload the configured signed-in Holvi group tab in Chrome.",
+    );
   }
   if (activeRequestId) {
     throw new Error("Another Holvi Agent Bridge request is active.");
@@ -248,7 +259,10 @@ function handleSocket(socket: net.Socket, config: BridgeConfig): void {
     input += chunk;
     if (Buffer.byteLength(input, "utf8") > MAX_SOCKET_REQUEST_BYTES) {
       handled = true;
-      sendSocket(socket, { ok: false, error: "Local bridge request is too large." });
+      sendSocket(socket, {
+        ok: false,
+        error: "Local bridge request is too large.",
+      });
       return;
     }
     const newline = input.indexOf("\n");
@@ -277,7 +291,9 @@ function handleSocket(socket: net.Socket, config: BridgeConfig): void {
 async function main(): Promise<void> {
   const callerOrigin = process.argv[2] || "";
   if (callerOrigin !== EXTENSION_ORIGIN) {
-    throw new Error("Native host caller origin is not the configured extension.");
+    throw new Error(
+      "Native host caller origin is not the configured extension.",
+    );
   }
 
   const { config } = await loadConfig();
@@ -306,7 +322,8 @@ async function main(): Promise<void> {
           const stat = await lstat(target);
           if (
             stat.isSocket() &&
-            (typeof process.getuid !== "function" || stat.uid === process.getuid())
+            (typeof process.getuid !== "function" ||
+              stat.uid === process.getuid())
           ) {
             await unlink(target);
           }
@@ -318,7 +335,13 @@ async function main(): Promise<void> {
     return cleanupPromise;
   };
   const exitAfterCleanup = (): void => {
-    cleanup().finally(() => process.exit(0));
+    void cleanup().then(
+      () => process.exit(0),
+      (error) => {
+        log(errorMessage(error));
+        process.exit(1);
+      },
+    );
   };
   process.stdin.once("end", exitAfterCleanup);
   process.once("SIGTERM", exitAfterCleanup);

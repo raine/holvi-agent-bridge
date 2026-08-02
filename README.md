@@ -3,10 +3,10 @@
 `holvi-agent-bridge` gives local agents capability-scoped access to Holvi
 through an existing signed-in Chrome session.
 
-Chrome acts as the authentication vault. The agent uses a local CLI and does
-not need to navigate or click through the Holvi site. The bridge exposes named
-operations instead of arbitrary authenticated HTTP requests, so each new area
-of Holvi can be added and approved independently.
+Chrome acts as the authentication vault. The agent uses a local CLI and does not
+need to navigate or click through the Holvi site. The bridge exposes named
+operations instead of arbitrary authenticated HTTP requests, so each new area of
+Holvi can be added and approved independently.
 
 Receipt handling is the first workflow built on the bridge. It is not the
 boundary of the project.
@@ -15,18 +15,18 @@ boundary of the project.
 
 An installation explicitly enables capabilities in its private config.
 
-| Capability | Operations |
-| --- | --- |
+| Capability          | Operations                                                           |
+| ------------------- | -------------------------------------------------------------------- |
 | `transactions.read` | Check the connection, scan transactions, and inspect one transaction |
-| `attachments.write` | Attach a local file after preflight checks and verify the result |
+| `attachments.write` | Attach a local file after preflight checks and verify the result     |
 
 `attachments.write` operations also require `transactions.read` because the
 bridge checks attachment state immediately before and after a write.
 
 Future capabilities can cover other Holvi areas, such as transaction metadata,
-bookkeeping fields, reports, invoices, and exports. Each capability gets its
-own validated commands, API implementation, and tests. The bridge has no
-generic `fetch` or arbitrary endpoint command.
+bookkeeping fields, reports, invoices, and exports. Each capability gets its own
+validated commands, API implementation, and tests. The bridge has no generic
+`fetch` or arbitrary endpoint command.
 
 Inspect the capabilities and operations enabled on a machine:
 
@@ -39,6 +39,7 @@ holvi-agent-bridge capabilities
 - macOS or Linux
 - Google Chrome
 - Node.js 20 or later
+- `tsgo`, installed locally through `@typescript/native-preview`
 - a Holvi account with access to the target company
 - local directories containing any files the agent may attach
 
@@ -109,12 +110,14 @@ Scan a date range for transactions that have no attachment:
 holvi-agent-bridge scan --from 2026-07-01 --to 2026-07-31 --json
 ```
 
-The JSON output includes each Holvi transaction UUID. Inspect the exact target
+The JSON output keeps Holvi's payment UUID and direct-match debt UUID separate.
+Settled transactions normally have a debt UUID. Pending payments can have `null`
+until Holvi creates the debt record used for attachments. Inspect the exact debt
 before selecting a receipt:
 
 ```sh
 holvi-agent-bridge preview \
-  --transaction '11111111-1111-4111-8111-111111111111'
+  --debt '11111111-1111-4111-8111-111111111111'
 ```
 
 Run an upload without `--yes` first. This checks the transaction and local file
@@ -122,7 +125,7 @@ without changing Holvi:
 
 ```sh
 holvi-agent-bridge upload \
-  --transaction '11111111-1111-4111-8111-111111111111' \
+  --debt '11111111-1111-4111-8111-111111111111' \
   --file '/absolute/path/to/receipts/example.pdf'
 ```
 
@@ -130,7 +133,7 @@ After verifying the dry-run output, perform the upload:
 
 ```sh
 holvi-agent-bridge upload \
-  --transaction '11111111-1111-4111-8111-111111111111' \
+  --debt '11111111-1111-4111-8111-111111111111' \
   --file '/absolute/path/to/receipts/example.pdf' \
   --yes
 ```
@@ -175,16 +178,15 @@ Holvi feature requires code that validates its input and output.
 configured root. Absolute paths, realpath containment, file type, and size
 checks prevent accidental access through relative paths or symlink escapes.
 
-**Local commands are authenticated.** The installer creates a random HMAC
-secret in a `0600` config file. CLI requests are signed, expire after 30
-seconds, and carry replay-protected nonces. The native host listens on a
-user-owned `0600` Unix socket and accepts only the stable extension origin.
+**Local commands are authenticated.** The installer creates a random HMAC secret
+in a `0600` config file. CLI requests are signed, expire after 30 seconds, and
+carry replay-protected nonces. The native host listens on a user-owned `0600`
+Unix socket and accepts only the stable extension origin.
 
-The bridge protects the boundary between Chrome, the local agent, the
-configured Holvi account, and explicitly approved local files. It does not try
-to defend against processes that already run as the same operating-system
-user, because those processes can read the user's files and browser profile
-directly.
+The bridge protects the boundary between Chrome, the local agent, the configured
+Holvi account, and explicitly approved local files. It does not try to defend
+against processes that already run as the same operating-system user, because
+those processes can read the user's files and browser profile directly.
 
 ## Local files
 
@@ -222,7 +224,7 @@ The initial capabilities use these private Holvi application endpoints:
 
 ```text
 GET  /api/pool/{poolHandle}/ux/payments-feed/
-GET  /api/pool/{poolHandle}/debt/{transactionUuid}/
+GET  /api/pool/{poolHandle}/debt/{debtUuid}/
 POST /api/pool/{poolHandle}/attachment/formpost/
 ```
 
@@ -241,4 +243,5 @@ npm test
 ```
 
 Chrome loads `dist/extension`. The native host runs `dist/native/host.js`.
-TypeScript source lives under `src/`.
+TypeScript source lives under `src/`. Builds and type checks use the native
+TypeScript compiler, `tsgo`.

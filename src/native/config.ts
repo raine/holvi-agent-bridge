@@ -56,7 +56,8 @@ export function defaultConfigPath(): string {
       "config.json",
     );
   }
-  const configRoot = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+  const configRoot =
+    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
   return path.join(configRoot, "holvi-agent-bridge", "config.json");
 }
 
@@ -112,8 +113,9 @@ export function validateConfig(value: unknown): BridgeConfig {
   }
   if (
     !config.groupPathSegment ||
-    parseGroupUrl(`${ACCOUNT_ORIGIN}/group/${encodeURIComponent(config.groupPathSegment)}/`)
-      .poolHandle !== config.poolHandle
+    parseGroupUrl(
+      `${ACCOUNT_ORIGIN}/group/${encodeURIComponent(config.groupPathSegment)}/`,
+    ).poolHandle !== config.poolHandle
   ) {
     throw new Error("Holvi Agent Bridge config has an invalid group target.");
   }
@@ -131,22 +133,30 @@ export function validateConfig(value: unknown): BridgeConfig {
   }
   if (
     !Array.isArray(config.receiptRoots) ||
-    config.receiptRoots.some((root) => typeof root !== "string" || !path.isAbsolute(root))
+    config.receiptRoots.some(
+      (root) => typeof root !== "string" || !path.isAbsolute(root),
+    )
   ) {
-    throw new Error("Holvi Agent Bridge config has an invalid attachment folder.");
+    throw new Error(
+      "Holvi Agent Bridge config has an invalid attachment folder.",
+    );
   }
   if (
     config.capabilities.includes("attachments.write") &&
     config.receiptRoots.length < 1
   ) {
-    throw new Error("attachments.write requires an approved attachment folder.");
+    throw new Error(
+      "attachments.write requires an approved attachment folder.",
+    );
   }
   if (
     !Number.isSafeInteger(config.maxFileBytes) ||
     (config.maxFileBytes || 0) < 1 ||
     (config.maxFileBytes || 0) > DEFAULT_MAX_FILE_BYTES
   ) {
-    throw new Error("Holvi Agent Bridge config has an invalid file-size limit.");
+    throw new Error(
+      "Holvi Agent Bridge config has an invalid file-size limit.",
+    );
   }
   return config as BridgeConfig;
 }
@@ -165,10 +175,13 @@ export async function loadConfig(): Promise<{
   config: BridgeConfig;
   configPath: string;
 }> {
-  const configPath = process.env.HOLVI_AGENT_BRIDGE_CONFIG || defaultConfigPath();
+  const configPath =
+    process.env.HOLVI_AGENT_BRIDGE_CONFIG || defaultConfigPath();
   const stat = await lstat(configPath);
   if (!stat.isFile() || (stat.mode & 0o077) !== 0) {
-    throw new Error(`Config must be a regular file with 0600 permissions: ${configPath}`);
+    throw new Error(
+      `Config must be a regular file with 0600 permissions: ${configPath}`,
+    );
   }
   if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
     throw new Error(`Config must be owned by the current user: ${configPath}`);
@@ -179,7 +192,10 @@ export async function loadConfig(): Promise<{
 
 function isInside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 const mimeByExtension = new Map([
@@ -222,7 +238,9 @@ export async function resolveReceiptFile(
     throw new Error("Receipt path must identify a regular file.");
   }
   if (stat.size < 1 || stat.size > config.maxFileBytes) {
-    throw new Error(`Receipt size must be between 1 and ${config.maxFileBytes} bytes.`);
+    throw new Error(
+      `Receipt size must be between 1 and ${config.maxFileBytes} bytes.`,
+    );
   }
   await access(candidate, fsConstants.R_OK);
 
