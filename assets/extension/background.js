@@ -624,6 +624,9 @@
   // src/extension/bookkeeping-description-workflow.ts
   var bookkeepingDescriptionMaxBytes = 4096;
   var maxBookkeepingItems2 = 500;
+  var maxDiagnosticPaths = 32;
+  var maxDiagnosticDepth = 8;
+  var maxDiagnosticFieldBytes = 128;
   var criticalDebtFields = [
     "uuid",
     "payment_account_uuid",
@@ -727,6 +730,44 @@
     delete copy.description;
     return copy;
   }
+  function diagnosticPath(parent, field) {
+    const boundedField = new TextEncoder().encode(field).byteLength <= maxDiagnosticFieldBytes ? field : "<oversized-field-name>";
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(boundedField) ? parent ? `${parent}.${boundedField}` : boundedField : `${parent}[${JSON.stringify(boundedField)}]`;
+  }
+  function changedFieldPaths(expected, actual) {
+    const paths = [];
+    let truncated = false;
+    function visit(left, right, path, depth) {
+      if (canonicalJson(left) === canonicalJson(right)) {
+        return;
+      }
+      if (paths.length >= maxDiagnosticPaths) {
+        truncated = true;
+        return;
+      }
+      if (depth < maxDiagnosticDepth && left && right && typeof left === "object" && typeof right === "object" && !Array.isArray(left) && !Array.isArray(right)) {
+        const leftRecord = left;
+        const rightRecord = right;
+        const fields = Array.from(new Set([...Object.keys(leftRecord), ...Object.keys(rightRecord)])).sort();
+        for (const field of fields) {
+          const fieldPath = diagnosticPath(path, field);
+          if (!Object.hasOwn(leftRecord, field) || !Object.hasOwn(rightRecord, field)) {
+            if (paths.length >= maxDiagnosticPaths) {
+              truncated = true;
+              return;
+            }
+            paths.push(fieldPath);
+          } else {
+            visit(leftRecord[field], rightRecord[field], fieldPath, depth + 1);
+          }
+        }
+        return;
+      }
+      paths.push(path || "value");
+    }
+    visit(expected, actual, "", 0);
+    return { paths, truncated };
+  }
   function verifyItems(expected, after, itemUuid, description) {
     if (after.items.length !== expected.length) {
       throw new Error("Bookkeeping verification found a changed line-item count.");
@@ -743,8 +784,12 @@
         if (actualItem.description !== description) {
           throw new Error("Bookkeeping verification found an unexpected description.");
         }
-        if (canonicalJson(withoutDescription(expectedItem)) !== canonicalJson(withoutDescription(actualItem))) {
-          throw new Error("Bookkeeping verification found changed fields on the target item.");
+        const expectedFields = withoutDescription(expectedItem);
+        const actualFields = withoutDescription(actualItem);
+        if (canonicalJson(expectedFields) !== canonicalJson(actualFields)) {
+          const changes = changedFieldPaths(expectedFields, actualFields);
+          const omitted = changes.truncated ? " Additional fields were omitted." : "";
+          throw new Error(`Bookkeeping verification found changed target item fields: ${JSON.stringify(changes.paths)}.${omitted}`);
         }
       } else if (canonicalJson(expectedItem) !== canonicalJson(actualItem)) {
         throw new Error("Bookkeeping verification found a changed sibling item.");

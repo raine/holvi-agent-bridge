@@ -4,6 +4,9 @@ import { BridgeSession, validateUuid } from "./session.js";
 
 export const bookkeepingDescriptionMaxBytes = 4096;
 const maxBookkeepingItems = 500;
+const maxDiagnosticPaths = 32;
+const maxDiagnosticDepth = 8;
+const maxDiagnosticFieldBytes = 128;
 const criticalDebtFields = [
   "uuid",
   "payment_account_uuid",
@@ -165,6 +168,76 @@ function withoutDescription(item: JsonRecord): JsonRecord {
   return copy;
 }
 
+function diagnosticPath(parent: string, field: string): string {
+  const boundedField =
+    new TextEncoder().encode(field).byteLength <= maxDiagnosticFieldBytes
+      ? field
+      : "<oversized-field-name>";
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(boundedField)
+    ? parent
+      ? `${parent}.${boundedField}`
+      : boundedField
+    : `${parent}[${JSON.stringify(boundedField)}]`;
+}
+
+function changedFieldPaths(
+  expected: JsonRecord,
+  actual: JsonRecord,
+): { paths: string[]; truncated: boolean } {
+  const paths: string[] = [];
+  let truncated = false;
+
+  function visit(
+    left: unknown,
+    right: unknown,
+    path: string,
+    depth: number,
+  ): void {
+    if (canonicalJson(left) === canonicalJson(right)) {
+      return;
+    }
+    if (paths.length >= maxDiagnosticPaths) {
+      truncated = true;
+      return;
+    }
+    if (
+      depth < maxDiagnosticDepth &&
+      left &&
+      right &&
+      typeof left === "object" &&
+      typeof right === "object" &&
+      !Array.isArray(left) &&
+      !Array.isArray(right)
+    ) {
+      const leftRecord = left as JsonRecord;
+      const rightRecord = right as JsonRecord;
+      const fields = Array.from(
+        new Set([...Object.keys(leftRecord), ...Object.keys(rightRecord)]),
+      ).sort();
+      for (const field of fields) {
+        const fieldPath = diagnosticPath(path, field);
+        if (
+          !Object.hasOwn(leftRecord, field) ||
+          !Object.hasOwn(rightRecord, field)
+        ) {
+          if (paths.length >= maxDiagnosticPaths) {
+            truncated = true;
+            return;
+          }
+          paths.push(fieldPath);
+        } else {
+          visit(leftRecord[field], rightRecord[field], fieldPath, depth + 1);
+        }
+      }
+      return;
+    }
+    paths.push(path || "value");
+  }
+
+  visit(expected, actual, "", 0);
+  return { paths, truncated };
+}
+
 function verifyItems(
   expected: JsonRecord[],
   after: DebtSnapshot,
@@ -198,12 +271,15 @@ function verifyItems(
           "Bookkeeping verification found an unexpected description.",
         );
       }
-      if (
-        canonicalJson(withoutDescription(expectedItem)) !==
-        canonicalJson(withoutDescription(actualItem))
-      ) {
+      const expectedFields = withoutDescription(expectedItem);
+      const actualFields = withoutDescription(actualItem);
+      if (canonicalJson(expectedFields) !== canonicalJson(actualFields)) {
+        const changes = changedFieldPaths(expectedFields, actualFields);
+        const omitted = changes.truncated
+          ? " Additional fields were omitted."
+          : "";
         throw new Error(
-          "Bookkeeping verification found changed fields on the target item.",
+          `Bookkeeping verification found changed target item fields: ${JSON.stringify(changes.paths)}.${omitted}`,
         );
       }
     } else if (canonicalJson(expectedItem) !== canonicalJson(actualItem)) {

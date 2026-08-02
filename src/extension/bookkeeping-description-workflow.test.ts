@@ -192,6 +192,40 @@ describe("bookkeeping description workflow", () => {
     });
   });
 
+  test("reports changed target field paths without their values", async () => {
+    const target = {
+      ...lineItem(targetUuid, "Replacement"),
+      category: "changed-category-value",
+      detailed_price: {
+        ...lineItem(targetUuid, "Replacement").detailed_price,
+        gross: "changed-price-value",
+      },
+      server_timestamp: "sensitive-server-value",
+    };
+    const responses = [
+      jsonResponse(debt()),
+      jsonResponse({}),
+      jsonResponse({
+        ...debt("Replacement"),
+        items: [target, lineItem(siblingUuid, "Sibling")],
+      }),
+    ];
+    const workflow = setup(async () => responses.shift()!);
+
+    let message = "";
+    try {
+      await workflow.change(auth, change(true));
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain(
+      'changed target item fields: ["category","detailed_price.gross","server_timestamp"]',
+    );
+    expect(message).not.toContain("changed-category-value");
+    expect(message).not.toContain("changed-price-value");
+    expect(message).not.toContain("sensitive-server-value");
+  });
+
   test("requires bookkeeping.write independently of bookkeeping.read", async () => {
     let fetchCount = 0;
     const workflow = setup(async () => {
