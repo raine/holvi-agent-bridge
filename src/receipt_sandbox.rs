@@ -1,4 +1,5 @@
 use std::fs::{self, File, Metadata};
+use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -17,7 +18,7 @@ pub struct ReceiptFile {
     pub mime_type: &'static str,
     pub size: u64,
     #[serde(skip)]
-    pub file: File,
+    bytes: Box<[u8]>,
     #[serde(skip)]
     identity: FileIdentity,
 }
@@ -26,11 +27,6 @@ pub struct ReceiptFile {
 struct FileIdentity {
     device: u64,
     inode: u64,
-    size: u64,
-    modified_seconds: i64,
-    modified_nanoseconds: i64,
-    changed_seconds: i64,
-    changed_nanoseconds: i64,
 }
 
 impl FileIdentity {
@@ -38,29 +34,22 @@ impl FileIdentity {
         Self {
             device: metadata.dev(),
             inode: metadata.ino(),
-            size: metadata.len(),
-            modified_seconds: metadata.mtime(),
-            modified_nanoseconds: metadata.mtime_nsec(),
-            changed_seconds: metadata.ctime(),
-            changed_nanoseconds: metadata.ctime_nsec(),
         }
     }
 }
 
 impl ReceiptFile {
-    pub fn ensure_unchanged(&self) -> Result<()> {
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn ensure_path_identity(&self) -> Result<()> {
         let path_identity = FileIdentity::from_metadata(
             &fs::metadata(&self.path).context("Receipt path changed while reading the file.")?,
         );
         ensure!(
-            path_identity.device == self.identity.device
-                && path_identity.inode == self.identity.inode,
+            path_identity == self.identity,
             "Receipt path changed while reading the file."
-        );
-        let open_identity = FileIdentity::from_metadata(&self.file.metadata()?);
-        ensure!(
-            open_identity == self.identity,
-            "Receipt changed while reading the file."
         );
         Ok(())
     }
@@ -97,26 +86,36 @@ pub fn resolve_receipt_file(
         roots.iter().any(|root| candidate.starts_with(root)),
         "Receipt path is outside the approved receipt folders."
     );
+    let mut file = File::open(&candidate).context("Receipt file must be readable.")?;
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_file(),
+        "Receipt path must identify a regular file."
+    );
+    ensure!(
+        (MIN_RECEIPT_BYTES..=max_file_bytes).contains(&metadata.len()),
+        "Receipt size must be between 1 and {} bytes.",
+        max_file_bytes
+    );
+    let identity = FileIdentity::from_metadata(&metadata);
     let path_metadata = fs::metadata(&candidate)?;
     ensure!(
         path_metadata.is_file(),
         "Receipt path must identify a regular file."
     );
     ensure!(
-        (MIN_RECEIPT_BYTES..=max_file_bytes).contains(&path_metadata.len()),
-        "Receipt size must be between 1 and {} bytes.",
-        max_file_bytes
-    );
-    let file = File::open(&candidate).context("Receipt file must be readable.")?;
-    let metadata = file.metadata()?;
-    ensure!(
-        metadata.is_file(),
-        "Receipt path must identify a regular file."
-    );
-    let identity = FileIdentity::from_metadata(&metadata);
-    ensure!(
         identity == FileIdentity::from_metadata(&path_metadata),
         "Receipt changed while opening the file."
+    );
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.by_ref()
+        .take(max_file_bytes)
+        .read_to_end(&mut bytes)
+        .context("Unable to read receipt file.")?;
+    let final_metadata = file.metadata()?;
+    ensure!(
+        final_metadata.len() == metadata.len() && bytes.len() as u64 == metadata.len(),
+        "Receipt size changed while reading the file."
     );
     let extension = candidate
         .extension()
@@ -135,20 +134,22 @@ pub fn resolve_receipt_file(
         .and_then(|value| value.to_str())
         .context("Receipt filename is not valid UTF-8.")?
         .to_owned();
-    Ok(ReceiptFile {
+    let receipt = ReceiptFile {
         path: candidate,
         file_name,
         mime_type,
         size: metadata.len(),
-        file,
+        bytes: bytes.into_boxed_slice(),
         identity,
-    })
+    };
+    receipt.ensure_path_identity()?;
+    Ok(receipt)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
     use std::os::unix::fs::symlink;
+    use std::time::{Duration, SystemTime};
 
     use tempfile::tempdir;
 
@@ -186,24 +187,22 @@ mod tests {
     }
 
     #[test]
-    fn keeps_the_approved_file_open_when_its_path_is_replaced() {
+    fn keeps_the_approved_snapshot_when_its_path_is_replaced() {
         let temporary = tempdir().unwrap();
         let approved = temporary.path().join("approved");
         fs::create_dir(&approved).unwrap();
         let receipt = approved.join("receipt.pdf");
         let displaced = approved.join("displaced.pdf");
         fs::write(&receipt, b"approved contents").unwrap();
-        let mut resolved = resolve_receipt_file(&[approved], 1024 * 1024, &receipt).unwrap();
+        let resolved = resolve_receipt_file(&[approved], 1024 * 1024, &receipt).unwrap();
 
         fs::rename(&receipt, &displaced).unwrap();
         fs::write(&receipt, b"replacement contents").unwrap();
-        let mut contents = Vec::new();
-        resolved.file.read_to_end(&mut contents).unwrap();
 
-        assert_eq!(contents, b"approved contents");
+        assert_eq!(resolved.bytes(), b"approved contents");
         assert!(
             resolved
-                .ensure_unchanged()
+                .ensure_path_identity()
                 .unwrap_err()
                 .to_string()
                 .contains("path changed")
@@ -211,7 +210,26 @@ mod tests {
     }
 
     #[test]
-    fn detects_mutation_of_the_approved_file() {
+    fn accepts_metadata_changes_after_snapshotting() {
+        let temporary = tempdir().unwrap();
+        let approved = temporary.path().join("approved");
+        fs::create_dir(&approved).unwrap();
+        let receipt = approved.join("receipt.pdf");
+        fs::write(&receipt, b"approved contents").unwrap();
+        let resolved = resolve_receipt_file(&[approved], 1024 * 1024, &receipt).unwrap();
+        let file = File::options().write(true).open(&receipt).unwrap();
+
+        file.set_times(
+            fs::FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
+        )
+        .unwrap();
+
+        resolved.ensure_path_identity().unwrap();
+        assert_eq!(resolved.bytes(), b"approved contents");
+    }
+
+    #[test]
+    fn keeps_snapshot_bytes_when_the_file_content_changes() {
         let temporary = tempdir().unwrap();
         let approved = temporary.path().join("approved");
         fs::create_dir(&approved).unwrap();
@@ -221,13 +239,21 @@ mod tests {
 
         fs::write(&receipt, b"changed! contents").unwrap();
 
-        assert!(
-            resolved
-                .ensure_unchanged()
-                .unwrap_err()
-                .to_string()
-                .contains("Receipt changed")
-        );
+        resolved.ensure_path_identity().unwrap();
+        assert_eq!(resolved.bytes(), b"approved contents");
+    }
+
+    #[test]
+    fn enforces_snapshot_size_limits() {
+        let temporary = tempdir().unwrap();
+        let approved = temporary.path().join("approved");
+        fs::create_dir(&approved).unwrap();
+        let receipt = approved.join("receipt.pdf");
+        fs::write(&receipt, b"12345").unwrap();
+
+        let error = resolve_receipt_file(&[approved], 4, &receipt).unwrap_err();
+
+        assert!(error.to_string().contains("between 1 and 4 bytes"));
     }
 
     #[test]
