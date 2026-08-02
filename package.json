@@ -1,0 +1,24 @@
+{
+  "name": "holvi-agent-bridge",
+  "version": "0.1.0",
+  "description": "A capability-scoped local agent bridge for Holvi through a signed-in Chrome session.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "holvi-agent-bridge": "./dist/native/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.native.json && tsc -p tsconfig.extension.json && cp src/extension/manifest.json dist/extension/manifest.json",
+    "check": "tsc -p tsconfig.native.json --noEmit && tsc -p tsconfig.extension.json --noEmit",
+    "pretest": "npm run build",
+    "test": "node --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.329",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.3"
+  }
+}
