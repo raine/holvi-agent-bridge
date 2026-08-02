@@ -39,13 +39,18 @@ mode = "auto"
 command = ["bun", "run", "check:format"]
 
 [[check]]
+name = "extension-test"
+mode = "auto"
+command = ["bun", "run", "test:extension"]
+
+[[check]]
 name = "artifacts"
 mode = "auto"
 command = ["bun", "run", "check:artifacts"]
 
 [[group]]
 name = "all"
-checks = ["format-check", "clippy", "compile", "build", "test", "extension-types", "extension-lint", "extension-format", "artifacts"]
+checks = ["format-check", "clippy", "compile", "build", "test", "extension-types", "extension-lint", "extension-format", "extension-test", "artifacts"]
 
 [[group]]
 name = "rust"
@@ -53,4 +58,4 @@ checks = ["format-check", "clippy", "compile", "build", "test"]
 
 [[group]]
 name = "extension"
-checks = ["extension-types", "extension-lint", "extension-format", "artifacts"]
+checks = ["extension-types", "extension-lint", "extension-format", "extension-test", "artifacts"]

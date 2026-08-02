@@ -6,13 +6,14 @@
   "type": "module",
   "packageManager": "bun@1.3.13",
   "scripts": {
-    "build": "rm -rf dist/extension && tsgo -p tsconfig.extension.json && cp src/extension/manifest.json dist/extension/manifest.json",
+    "build": "rm -rf dist/extension && tsgo -p tsconfig.extension.json && bun build src/extension/background.ts --target browser --format iife --outfile dist/extension/background.js && rm dist/extension/policy.js dist/extension/projections.js && cp src/extension/manifest.json dist/extension/manifest.json",
     "check:artifacts": "bun run build && bun scripts/check-extension-artifacts.mjs",
     "check:format": "oxfmt --check src/extension package.json tsconfig.json tsconfig.extension.json .oxfmtrc.json .oxlintrc.json",
     "check:lint": "oxlint src/extension --type-aware --deny-warnings",
     "check:types": "tsgo -p tsconfig.extension.json --noEmit",
     "format": "oxfmt --write src/extension package.json tsconfig.json tsconfig.extension.json .oxfmtrc.json .oxlintrc.json",
-    "sync:artifacts": "bun run build && cp dist/extension/background.js dist/extension/config.js dist/extension/content.js dist/extension/manifest.json assets/extension/"
+    "sync:artifacts": "bun run build && cp dist/extension/background.js dist/extension/config.js dist/extension/content.js dist/extension/manifest.json assets/extension/",
+    "test:extension": "bun test src/extension"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.329",

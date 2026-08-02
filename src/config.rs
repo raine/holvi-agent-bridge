@@ -14,7 +14,12 @@ pub const EXTENSION_ORIGIN: &str = "chrome-extension://oeedcemphbobfehfmcllmjhhh
 pub const HOST_NAME: &str = "app.holvi_agent_bridge";
 pub const ACCOUNT_ORIGIN: &str = "https://account.app.holvi.com";
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
-pub const SUPPORTED_CAPABILITIES: [&str; 2] = ["transactions.read", "attachments.write"];
+pub const SUPPORTED_CAPABILITIES: [&str; 4] = [
+    "transactions.read",
+    "attachments.write",
+    "bookkeeping.read",
+    "audit.read",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -319,6 +324,13 @@ mod tests {
         assert!(invalid.validate().is_err());
         let mut read_only = config(vec![]);
         read_only.capabilities = vec!["transactions.read".into()];
+        assert!(read_only.validate().is_ok());
+    }
+
+    #[test]
+    fn accepts_new_read_capabilities_without_receipt_roots() {
+        let mut read_only = config(vec![]);
+        read_only.capabilities = vec!["bookkeeping.read".into(), "audit.read".into()];
         assert!(read_only.validate().is_ok());
     }
 

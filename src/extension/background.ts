@@ -1,4 +1,10 @@
-"use strict";
+import {
+  projectAuditPage,
+  projectBookkeepingDebt,
+  projectCategories,
+  projectSuggestions,
+} from "./projections.js";
+import { requiredCapabilities, supportedCapabilities } from "./policy.js";
 
 declare function importScripts(...urls: string[]): void;
 
@@ -13,10 +19,6 @@ const uploadMimeTypes = new Set([
   "image/png",
   "image/jpeg",
   "image/gif",
-]);
-const supportedCapabilities = new Set([
-  "transactions.read",
-  "attachments.write",
 ]);
 const fileChunkBytes = 480 * 1024;
 
@@ -591,6 +593,59 @@ async function previewDebt(
   return projectDebt(debt, validUuid);
 }
 
+async function bookkeepingDebt(
+  auth: Auth,
+  debtUuid: string,
+): Promise<Record<string, unknown>> {
+  const validUuid = validateUuid(debtUuid, "debt");
+  return projectBookkeepingDebt(
+    await apiRequest(auth, debtPath(validUuid)),
+    validUuid,
+  );
+}
+
+async function bookkeepingCategories(
+  auth: Auth,
+): Promise<Record<string, unknown>[]> {
+  return projectCategories(
+    await apiRequest(auth, `${configuredApiRoot()}category/`),
+  );
+}
+
+async function bookkeepingSuggestions(
+  auth: Auth,
+  debtUuid: string,
+): Promise<Record<string, unknown>> {
+  const validUuid = validateUuid(debtUuid, "debt");
+  return projectSuggestions(
+    await apiRequest(
+      auth,
+      `${debtPath(validUuid)}haip/bookkeeping-suggestions/`,
+    ),
+    validUuid,
+  );
+}
+
+async function recentAudit(
+  auth: Auth,
+  limit: unknown,
+): Promise<Record<string, unknown>> {
+  if (
+    !Number.isSafeInteger(limit) ||
+    (limit as number) < 1 ||
+    (limit as number) > 25
+  ) {
+    throw new Error("Activity limit must be between 1 and 25.");
+  }
+  return projectAuditPage(
+    await apiRequest(
+      auth,
+      `${configuredApiRoot()}log-feed/?o=-timestamp&page_size=25`,
+    ),
+    limit as number,
+  );
+}
+
 function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64);
   const bytes = new Uint8Array(new ArrayBuffer(binary.length));
@@ -679,26 +734,65 @@ async function uploadReceipt(
 }
 
 async function handleCommand(message: NativeMessage): Promise<unknown> {
-  requireCapabilities("transactions.read");
+  const action = message.action || "";
+  const requirements = requiredCapabilities(action);
+  if (!requirements) {
+    throw new Error("The local helper requested an unsupported action.");
+  }
+  requireCapabilities(...requirements);
   const auth = await requestAuth();
-  switch (message.action) {
+  switch (action) {
     case "doctor": {
-      const page = (await apiRequest(auth, feedPath())) as FeedPage;
-      return {
+      const base = {
         connected: true,
         groupPathSegment: runtimeConfig?.groupPathSegment,
         poolHandle: runtimeConfig?.poolHandle,
         paymentAccountUuid: runtimeConfig?.paymentAccountUuid,
         capabilities: runtimeConfig?.capabilities,
-        firstPageResults: Array.isArray(page?.results)
-          ? page.results.length
-          : 0,
       };
+      if (runtimeConfig?.capabilities.includes("transactions.read")) {
+        requireCapabilities("transactions.read");
+        const page = (await apiRequest(auth, feedPath())) as FeedPage;
+        return {
+          ...base,
+          probeAction: "transactions",
+          firstPageResults: Array.isArray(page?.results)
+            ? page.results.length
+            : 0,
+        };
+      }
+      if (runtimeConfig?.capabilities.includes("bookkeeping.read")) {
+        requireCapabilities("bookkeeping.read");
+        const categories = await bookkeepingCategories(auth);
+        return {
+          ...base,
+          probeAction: "bookkeeping.categories",
+          categoryCount: categories.length,
+        };
+      }
+      if (runtimeConfig?.capabilities.includes("audit.read")) {
+        requireCapabilities("audit.read");
+        const audit = await recentAudit(auth, 1);
+        return {
+          ...base,
+          probeAction: "audit.list",
+          recentActivityCount: audit.returnedCount,
+        };
+      }
+      return { ...base, probeAction: null };
     }
     case "transactions":
       return listTransactions(auth, message.params || {});
     case "preview":
       return previewDebt(auth, asString(message.params?.debtUuid));
+    case "bookkeeping.get":
+      return bookkeepingDebt(auth, asString(message.params?.debtUuid));
+    case "bookkeeping.categories":
+      return bookkeepingCategories(auth);
+    case "bookkeeping.suggestions":
+      return bookkeepingSuggestions(auth, asString(message.params?.debtUuid));
+    case "audit.list":
+      return recentAudit(auth, message.params?.limit);
     default:
       throw new Error("The local helper requested an unsupported action.");
   }

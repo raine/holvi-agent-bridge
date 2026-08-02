@@ -1,11 +1,24 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 
-const files = ["background.js", "config.js", "content.js", "manifest.json"];
+const builtDirectory = new URL("../dist/extension/", import.meta.url);
+const embeddedDirectory = new URL("../assets/extension/", import.meta.url);
+const [builtFiles, embeddedFiles] = await Promise.all([
+  readdir(builtDirectory),
+  readdir(embeddedDirectory),
+]);
+builtFiles.sort();
+embeddedFiles.sort();
 
-for (const file of files) {
+if (JSON.stringify(builtFiles) !== JSON.stringify(embeddedFiles)) {
+  throw new Error(
+    `Embedded extension inventory differs from its TypeScript build. Built: ${builtFiles.join(", ")}. Embedded: ${embeddedFiles.join(", ")}. Run bun run sync:artifacts.`,
+  );
+}
+
+for (const file of builtFiles) {
   const [built, embedded] = await Promise.all([
-    readFile(new URL(`../dist/extension/${file}`, import.meta.url)),
-    readFile(new URL(`../assets/extension/${file}`, import.meta.url)),
+    readFile(new URL(file, builtDirectory)),
+    readFile(new URL(file, embeddedDirectory)),
   ]);
   if (!built.equals(embedded)) {
     throw new Error(

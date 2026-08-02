@@ -36,6 +36,29 @@ enum Command {
     Transactions(TransactionArgs),
     Preview(PreviewArgs),
     Upload(UploadArgs),
+    Bookkeeping {
+        #[command(subcommand)]
+        command: BookkeepingCommand,
+    },
+    Audit {
+        #[command(subcommand)]
+        command: AuditCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum BookkeepingCommand {
+    Get(PreviewArgs),
+    Categories,
+    Suggestions(PreviewArgs),
+}
+
+#[derive(Subcommand)]
+enum AuditCommand {
+    List {
+        #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u8).range(1..=25))]
+        limit: u8,
+    },
 }
 
 #[derive(Args)]
@@ -199,6 +222,43 @@ pub async fn run() -> Result<()> {
                 }))?;
             }
         }
+        Command::Bookkeeping { command } => match command {
+            BookkeepingCommand::Get(args) => {
+                validate_uuid(&args.debt, "Debt")?;
+                print_json(
+                    &request_host(
+                        &config.hmac_secret,
+                        "bookkeeping.get",
+                        json!({"debtUuid": args.debt}),
+                    )
+                    .await?,
+                )?;
+            }
+            BookkeepingCommand::Categories => {
+                print_json(
+                    &request_host(&config.hmac_secret, "bookkeeping.categories", json!({})).await?,
+                )?;
+            }
+            BookkeepingCommand::Suggestions(args) => {
+                validate_uuid(&args.debt, "Debt")?;
+                print_json(
+                    &request_host(
+                        &config.hmac_secret,
+                        "bookkeeping.suggestions",
+                        json!({"debtUuid": args.debt}),
+                    )
+                    .await?,
+                )?;
+            }
+        },
+        Command::Audit { command } => match command {
+            AuditCommand::List { limit } => {
+                print_json(
+                    &request_host(&config.hmac_secret, "audit.list", json!({"limit": limit}))
+                        .await?,
+                )?;
+            }
+        },
     }
     Ok(())
 }
@@ -351,6 +411,33 @@ mod tests {
             parse_date("2026-02-31").unwrap_err(),
             "must be a calendar date"
         );
+    }
+
+    #[test]
+    fn parses_new_capability_commands_and_bounds_audit_limit() {
+        let bookkeeping = Cli::try_parse_from([
+            "holvi",
+            "bookkeeping",
+            "suggestions",
+            "--debt",
+            "11111111-1111-4111-8111-111111111111",
+        ])
+        .unwrap();
+        assert!(matches!(
+            bookkeeping.command,
+            Some(Command::Bookkeeping {
+                command: BookkeepingCommand::Suggestions(_)
+            })
+        ));
+
+        let audit = Cli::try_parse_from(["holvi", "audit", "list", "--limit", "25"]).unwrap();
+        assert!(matches!(
+            audit.command,
+            Some(Command::Audit {
+                command: AuditCommand::List { limit: 25 }
+            })
+        ));
+        assert!(Cli::try_parse_from(["holvi", "audit", "list", "--limit", "26"]).is_err());
     }
 
     #[test]

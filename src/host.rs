@@ -456,6 +456,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn new_actions_enforce_their_own_capabilities() {
+        let mut config = BridgeConfig {
+            version: 2,
+            group_path_segment: "AbC123+example".into(),
+            pool_handle: "AbC123".into(),
+            payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
+            capabilities: vec!["bookkeeping.read".into()],
+            receipt_roots: vec![],
+            max_file_bytes: 1024,
+            hmac_secret: "a".repeat(64),
+        };
+        let mut request = BridgeRequest {
+            version: 1,
+            id: "11111111-1111-4111-8111-111111111111".into(),
+            issued_at: 0,
+            nonce: "a".repeat(32),
+            action: "bookkeeping.get".into(),
+            params: json!({}),
+        };
+        assert!(validate_dispatch(&request, &config, true, false).is_ok());
+        request.action = "audit.list".into();
+        assert!(validate_dispatch(&request, &config, true, false).is_err());
+        config.capabilities = vec!["audit.read".into()];
+        assert!(validate_dispatch(&request, &config, true, false).is_ok());
+    }
+
+    #[test]
+    fn doctor_accepts_every_valid_capability_set() {
+        let config = BridgeConfig {
+            version: 2,
+            group_path_segment: "AbC123+example".into(),
+            pool_handle: "AbC123".into(),
+            payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
+            capabilities: vec!["audit.read".into()],
+            receipt_roots: vec![],
+            max_file_bytes: 1024,
+            hmac_secret: "a".repeat(64),
+        };
+        let request = BridgeRequest {
+            version: 1,
+            id: "11111111-1111-4111-8111-111111111111".into(),
+            issued_at: 0,
+            nonce: "a".repeat(32),
+            action: "doctor".into(),
+            params: json!({}),
+        };
+        assert!(validate_dispatch(&request, &config, true, false).is_ok());
+    }
+
+    #[test]
     fn upload_dispatch_requires_confirmation() {
         let config = BridgeConfig {
             version: 2,

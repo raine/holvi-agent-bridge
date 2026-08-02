@@ -3,8 +3,8 @@
 `holvi-agent-bridge` gives local agents capability-scoped access to Holvi
 through an existing signed-in Chrome session.
 
-Chrome acts as the authentication vault. The agent uses a native `holvi` CLI
-and does not need to navigate through the Holvi site. The bridge exposes named
+Chrome acts as the authentication vault. The agent uses a native `holvi` CLI and
+does not need to navigate through the Holvi site. The bridge exposes named
 operations instead of arbitrary authenticated HTTP requests, so each Holvi area
 can be approved independently.
 
@@ -19,6 +19,8 @@ An installation explicitly enables capabilities in its private config.
 | ------------------- | -------------------------------------------------------------------- |
 | `transactions.read` | Check the connection, list transactions, and inspect one transaction |
 | `attachments.write` | Attach a local file after preflight checks and verify the result     |
+| `bookkeeping.read`  | Inspect accounting details, categories, and category suggestions     |
+| `audit.read`        | Inspect a bounded page of recent pool activity                        |
 
 `attachments.write` operations also require `transactions.read` because the
 bridge checks attachment state immediately before and after a write.
@@ -119,8 +121,8 @@ holvi transactions --from 2026-07-01 --to 2026-07-31 \
 ```
 
 The JSON output keeps Holvi's payment UUID and direct-match debt UUID separate.
-Settled transactions normally have a debt UUID. Pending payments can have
-`null` until Holvi creates the debt record used for attachments.
+Settled transactions normally have a debt UUID. Pending payments can have `null`
+until Holvi creates the debt record used for attachments.
 
 ```sh
 holvi preview \
@@ -148,6 +150,41 @@ holvi upload \
 The bridge reads the transaction immediately before upload and refuses to
 continue if any attachment exists. After Holvi accepts the file, it reads the
 transaction again and succeeds only when the attachment count is exactly one.
+
+## Bookkeeping and audit workflow
+
+Enable `bookkeeping.read` or `audit.read` during installation to expose their
+commands. These capabilities cover the configured Holvi pool, while
+`transactions.read` remains restricted to the configured payment account.
+
+Inspect the authoritative accounting document and its active line items:
+
+```sh
+holvi bookkeeping get \
+  --debt '11111111-1111-4111-8111-111111111111'
+```
+
+The result distinguishes unit prices from line totals and preserves Holvi's
+decimal strings without floating-point conversion. Inactive and non-line-item
+records are excluded and counted in `droppedItemCount`.
+
+List category codes and request Holvi's ordered category suggestions for one
+debt:
+
+```sh
+holvi bookkeeping categories
+holvi bookkeeping suggestions \
+  --debt '11111111-1111-4111-8111-111111111111'
+```
+
+Inspect up to 25 recent activity entries:
+
+```sh
+holvi audit list --limit 25
+```
+
+The audit result contains one bounded newest-first page. It omits polymorphic
+details, field changes, continuation URLs, and unprojected response fields.
 
 ## Security model
 
@@ -194,8 +231,8 @@ On macOS, files live at:
 ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/app.holvi_agent_bridge.json
 ```
 
-On Linux, equivalent files live under the XDG config directory and Google
-Chrome native messaging directory.
+On Linux, equivalent files live under the XDG config directory and Google Chrome
+native messaging directory.
 
 Config format version 2 remains compatible with existing installations. Running
 `holvi install` reuses a valid private HMAC secret and updates account scope,
@@ -217,9 +254,9 @@ and read-before-write and read-after-write checks in the extension.
 
 The compiled extension files live in `assets/extension` so `cargo install` and
 Nix packages can embed them. `src/extension` remains the TypeScript source of
-truth. `bun run sync:artifacts` rebuilds the extension and refreshes the embedded
-files. The check suite rejects differences between source builds and embedded
-artifacts.
+truth. `bun run sync:artifacts` rebuilds the extension and refreshes the
+embedded files. The check suite rejects differences between source builds and
+embedded artifacts.
 
 ## Holvi API surfaces
 
@@ -228,6 +265,9 @@ The capabilities use these Holvi application endpoints:
 ```text
 GET  /api/pool/{poolHandle}/ux/payments-feed/
 GET  /api/pool/{poolHandle}/debt/{debtUuid}/
+GET  /api/pool/{poolHandle}/debt/{debtUuid}/haip/bookkeeping-suggestions/
+GET  /api/pool/{poolHandle}/category/
+GET  /api/pool/{poolHandle}/log-feed/
 POST /api/pool/{poolHandle}/attachment/formpost/
 ```
 
@@ -245,7 +285,7 @@ just check
 ```
 
 `just check` delegates to `checkle run all`. Checkle verifies Rust formatting,
-Clippy, compilation, builds, Rust tests, extension type checking, extension
+Clippy, compilation, builds, Rust tests, extension type checking, extension tests,
 linting and formatting, and embedded artifact consistency.
 
 Useful focused commands:
