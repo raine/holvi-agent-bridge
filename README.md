@@ -20,7 +20,7 @@ An installation explicitly enables capabilities in its private config.
 | `transactions.read` | Check the connection, list transactions, and inspect one transaction |
 | `attachments.write` | Attach a local file after preflight checks and verify the result     |
 | `bookkeeping.read`  | Inspect accounting details, categories, and category suggestions     |
-| `audit.read`        | Inspect a bounded page of recent pool activity                        |
+| `audit.read`        | Inspect a bounded page of recent pool activity                       |
 
 `attachments.write` operations also require `transactions.read` because the
 bridge checks attachment state immediately before and after a write.
@@ -186,6 +186,197 @@ holvi audit list --limit 25
 The audit result contains one bounded newest-first page. It omits polymorphic
 details, field changes, continuation URLs, and unprojected response fields.
 
+## Command reference
+
+| Command                                                     | Capability                                                 | Description                                       |
+| ----------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------- |
+| [`install`](#holvi-install)                                 | none                                                       | Configure the account and register the extension  |
+| [`capabilities`](#holvi-capabilities)                       | none                                                       | Show enabled capabilities and operations          |
+| [`doctor`](#holvi-doctor)                                   | any configured capability                                  | Verify the Chrome connection and an API surface   |
+| [`transactions`](#holvi-transactions)                       | `transactions.read`                                        | List payment-account transactions                 |
+| [`preview`](#holvi-preview)                                 | `transactions.read`                                        | Inspect one accounting debt                       |
+| [`upload`](#holvi-upload)                                   | `transactions.read`, plus `attachments.write` with `--yes` | Validate or upload one receipt                    |
+| [`bookkeeping get`](#holvi-bookkeeping-get)                 | `bookkeeping.read`                                         | Inspect bookkeeping details and active line items |
+| [`bookkeeping categories`](#holvi-bookkeeping-categories)   | `bookkeeping.read`                                         | List bookkeeping categories                       |
+| [`bookkeeping suggestions`](#holvi-bookkeeping-suggestions) | `bookkeeping.read`                                         | List suggested category codes for one debt        |
+| [`audit list`](#holvi-audit-list)                           | `audit.read`                                               | List recent pool activity                         |
+
+### `holvi install`
+
+Writes config version 2, installs the embedded extension files, and registers
+the Chrome Native Messaging host. Repeated `--capability` and `--receipt-root`
+options preserve their input order and remove duplicates. A valid existing HMAC
+secret is reused.
+
+```sh
+holvi install \
+  --group-url URL \
+  --account UUID \
+  --capability CAPABILITY \
+  [--capability CAPABILITY] \
+  [--receipt-root /absolute/path] \
+  --yes
+```
+
+| Option                    | Required | Description                                         |
+| ------------------------- | -------- | --------------------------------------------------- |
+| `--group-url URL`         | yes      | Full `https://account.app.holvi.com/group/.../` URL |
+| `--account UUID`          | yes      | Payment account UUID used by the transaction feed   |
+| `--capability CAPABILITY` | yes      | Capability to enable, repeatable                    |
+| `--receipt-root PATH`     | no       | Approved absolute attachment directory, repeatable  |
+| `--yes`                   | yes      | Confirm registration of the Chrome native host      |
+
+`attachments.write` requires at least one receipt root. The command prints the
+config path, stable extension ID, unpacked extension path, and native host
+manifest path as JSON.
+
+### `holvi capabilities`
+
+Prints the configured capability list and every known operation as JSON. An
+operation value is `true` only when all of its required capabilities are
+enabled.
+
+```sh
+holvi capabilities
+```
+
+This command reads and validates the private config but does not connect to
+Chrome or Holvi.
+
+### `holvi doctor`
+
+Verifies config loading, Native Messaging, the configured Holvi tab, session
+authentication, and one API probe selected from enabled capabilities.
+
+```sh
+holvi doctor
+```
+
+Probe priority is transactions, bookkeeping categories, then audit activity. A
+write-only capability set verifies authentication and reports a null probe. The
+JSON result identifies the selected `probeAction` and includes account scope and
+capability metadata.
+
+### `holvi transactions`
+
+Lists payment-feed records from the configured payment account. The bridge reads
+all bounded API pages and applies date filtering locally.
+
+```sh
+holvi transactions \
+  [--from YYYY-MM-DD] \
+  [--to YYYY-MM-DD] \
+  [--missing-attachments] \
+  [--json]
+```
+
+| Option                  | Description                                           |
+| ----------------------- | ----------------------------------------------------- |
+| `--from YYYY-MM-DD`     | Include transactions on or after this calendar date   |
+| `--to YYYY-MM-DD`       | Include transactions on or before this calendar date  |
+| `--missing-attachments` | Request only transactions without attachments         |
+| `--json`                | Print the complete JSON projection instead of a table |
+
+`--from` must be on or before `--to`. With no dates, the command lists every
+transaction available within the configured page and result limits. JSON keeps
+`paymentUuid` and the direct-match `debtUuid` separate.
+
+### `holvi preview`
+
+Reads one authoritative debt record and prints the compact projection used by
+the receipt workflow.
+
+```sh
+holvi preview --debt UUID
+```
+
+The result includes the debt UUID, object code, counterparty, amount, currency,
+attachment count, and bookkeeping status. `--debt` must be a UUID.
+
+### `holvi upload`
+
+Validates a receipt path and either prints a dry-run or uploads the file.
+
+```sh
+holvi upload --debt UUID --file /absolute/path/to/receipt.pdf [--yes]
+```
+
+| Option        | Required | Description                                   |
+| ------------- | -------- | --------------------------------------------- |
+| `--debt UUID` | yes      | Debt that receives the attachment             |
+| `--file PATH` | yes      | Absolute path under an approved receipt root  |
+| `--yes`       | no       | Perform the upload after all preflight checks |
+
+Without `--yes`, the command reads the debt and prints `dryRun`, `transaction`,
+`receipt`, and `next` fields without modifying Holvi. With `--yes`, the
+extension requires zero existing attachments, uploads the file, and verifies
+that the resulting attachment count is exactly one.
+
+Accepted files are nonempty PDF, PNG, JPEG, or GIF files within the configured
+size limit. Canonical path checks reject relative paths and symlink escapes.
+
+### `holvi bookkeeping get`
+
+Reads the authoritative accounting document for a debt and prints a strict JSON
+projection.
+
+```sh
+holvi bookkeeping get --debt UUID
+```
+
+The result includes debt identity, booking and workflow metadata, attachment
+count, and active line items. Each line item separates `unitPrice` from
+`lineTotal`. Inactive and non-line-item records contribute to
+`droppedItemCount`. The returned debt UUID must match the requested UUID.
+
+### `holvi bookkeeping categories`
+
+Lists the pool's bookkeeping categories as JSON.
+
+```sh
+holvi bookkeeping categories
+```
+
+Each result contains a required `code` and optional `handle` and `label`.
+Unprojected category fields do not cross the extension boundary.
+
+### `holvi bookkeeping suggestions`
+
+Lists Holvi's ordered category suggestions for one debt.
+
+```sh
+holvi bookkeeping suggestions --debt UUID
+```
+
+The JSON result contains `debtUuid` and `categoryCodes`. Suggestion records are
+normalized to category codes, bounded to 100 entries, and reject unknown item
+shapes.
+
+### `holvi audit list`
+
+Lists one bounded page of recent activity for the configured pool.
+
+```sh
+holvi audit list [--limit LIMIT]
+```
+
+`--limit` accepts values from 1 through 25 and defaults to 25. The result
+contains `returnedCount`, `hasMore`, an `order` value of `newest-first`, and
+scalar activity entries. The extension verifies timestamp ordering and omits the
+backend continuation URL, structured content, details, summaries, and field
+changes.
+
+### Common command behavior
+
+- `-h` and `--help` print help for the selected command.
+- Successful machine-readable commands write formatted JSON to standard output.
+- Human-readable transaction output uses a fixed-width table unless `--json` is
+  present.
+- Validation, authorization, Chrome connection, timeout, and Holvi API errors go
+  to standard error and produce a nonzero exit status.
+- Commands that contact Holvi require the configured signed-in group tab to
+  remain open in Chrome.
+
 ## Security model
 
 **The Holvi session stays in Chrome.** The content script reads Holvi's JWT only
@@ -285,8 +476,8 @@ just check
 ```
 
 `just check` delegates to `checkle run all`. Checkle verifies Rust formatting,
-Clippy, compilation, builds, Rust tests, extension type checking, extension tests,
-linting and formatting, and embedded artifact consistency.
+Clippy, compilation, builds, Rust tests, extension type checking, extension
+tests, linting and formatting, and embedded artifact consistency.
 
 Useful focused commands:
 
