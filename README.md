@@ -10,24 +10,19 @@ so you can choose which parts of Holvi the agent may use.
 ## How it works
 
 ```mermaid
-sequenceDiagram
-    participant Agent as Local agent
-    participant CLI as holvi CLI
-    participant Host as Native host
-    participant Extension as Browser extension
-    participant Tab as Signed-in Holvi tab
-    participant API as Holvi API
-
-    Agent->>CLI: Named operation
-    CLI->>Host: Authenticated local request
-    Host->>Extension: Native message
-    Extension->>Tab: Request session authentication
-    Tab-->>Extension: Session authentication
-    Extension->>API: Account-scoped request
-    API-->>Extension: Response
-    Extension-->>Host: Projected result
-    Host-->>CLI: Result
-    CLI-->>Agent: Output
+flowchart LR
+    Agent["Local agent"] -->|"Named holvi command"| CLI["holvi CLI"]
+    Config["Private config<br/>Account, capabilities,<br/>receipt roots, HMAC secret"] --> CLI
+    CLI -->|"HMAC-signed request<br/>Owner-only Unix socket"| Host["Native host<br/>Authenticates request<br/>Checks capability"]
+    Config --> Host
+    Receipt["Approved receipt file"] -->|"Upload only"| Host
+    Host -->|"Chromium native messaging"| Extension["Extension service worker<br/>Checks capability and account scope"]
+    Tab["Signed-in Holvi group tab<br/>Content script"] -->|"Session authentication on demand"| Extension
+    Extension -->|"Account-scoped API request"| API["Holvi API"]
+    API -->|"Response"| Extension
+    Extension -->|"Projected data or verified upload result"| Host
+    Host --> CLI
+    CLI --> Agent
 ```
 
 Your Holvi sign-in stays in the browser, and the agent can use only the features
