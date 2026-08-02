@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import { lstat } from "node:fs/promises";
 import net from "node:net";
@@ -41,16 +41,16 @@ interface TransactionResult {
 const helpText = `Holvi Agent Bridge
 
 Usage:
-  holvi-agent-bridge install --group-url URL --account UUID \\
+  holvi install --group-url URL --account UUID \\
     --capability transactions.read [--capability attachments.write] \\
     [--receipt-root /absolute/path] --yes
-  holvi-agent-bridge capabilities
-  holvi-agent-bridge doctor
-  holvi-agent-bridge transactions [--from YYYY-MM-DD] [--to YYYY-MM-DD] \
+  holvi capabilities
+  holvi doctor
+  holvi transactions [--from YYYY-MM-DD] [--to YYYY-MM-DD] \
     [--missing-attachments] [--json]
-  holvi-agent-bridge preview --debt UUID
-  holvi-agent-bridge upload --debt UUID --file /absolute/path/to/receipt.pdf
-  holvi-agent-bridge upload --debt UUID --file /absolute/path/to/receipt.pdf --yes
+  holvi preview --debt UUID
+  holvi upload --debt UUID --file /absolute/path/to/receipt.pdf
+  holvi upload --debt UUID --file /absolute/path/to/receipt.pdf --yes
 
 Every command requires its configured capability. Upload is a dry check unless
 --yes is present. The configured signed-in Holvi group tab must remain open in

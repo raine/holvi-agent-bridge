@@ -1,11 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "rootDir": "src",
     "outDir": "dist",
-    "types": ["node"],
+    "types": ["bun"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,

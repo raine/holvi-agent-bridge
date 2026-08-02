@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
@@ -6,32 +6,32 @@ const JOBS = [
   {
     label: "types-native",
     color: "\x1b[38;5;81m",
-    cmd: "npm",
-    args: ["exec", "--", "tsgo", "-p", "tsconfig.native.json", "--noEmit"],
+    cmd: "bunx",
+    args: ["tsgo", "-p", "tsconfig.native.json", "--noEmit"],
   },
   {
     label: "types-extension",
     color: "\x1b[38;5;147m",
-    cmd: "npm",
-    args: ["exec", "--", "tsgo", "-p", "tsconfig.extension.json", "--noEmit"],
+    cmd: "bunx",
+    args: ["tsgo", "-p", "tsconfig.extension.json", "--noEmit"],
   },
   {
     label: "test",
     color: "\x1b[38;5;114m",
-    cmd: "npm",
-    args: ["test"],
+    cmd: "bun",
+    args: ["run", "test"],
   },
   {
     label: "lint",
     color: "\x1b[38;5;213m",
-    cmd: "npm",
-    args: ["exec", "--", "oxlint", "--type-aware", "--deny-warnings"],
+    cmd: "bunx",
+    args: ["oxlint", "--type-aware", "--deny-warnings"],
   },
   {
     label: "format",
     color: "\x1b[38;5;215m",
-    cmd: "npm",
-    args: ["exec", "--", "oxfmt", "--check", "."],
+    cmd: "bunx",
+    args: ["oxfmt", "--check", "."],
   },
 ];
 

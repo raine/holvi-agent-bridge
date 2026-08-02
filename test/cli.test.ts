@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "bun:test";
 import { internal } from "../dist/native/cli.js";
 
 test("install parsing preserves repeated receipt roots", () => {

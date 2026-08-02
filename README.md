@@ -31,26 +31,27 @@ validated commands, API implementation, and tests. The bridge has no generic
 Inspect the capabilities and operations enabled on a machine:
 
 ```sh
-holvi-agent-bridge capabilities
+holvi capabilities
 ```
 
 ## Requirements
 
 - macOS or Linux
 - Google Chrome
-- Node.js 20 or later
+- Bun 1.3 or later
 - `tsgo`, installed locally through `@typescript/native-preview`
 - a Holvi account with access to the target company
 - local directories containing any files the agent may attach
 
 ## Install
 
-Install the development dependencies and build the TypeScript source:
+Install the development dependencies, build the TypeScript source, and install
+the `holvi` binary globally:
 
 ```sh
-npm install
-npm run build
-npm link
+bun install
+bun run build
+bun install --global "$PWD"
 ```
 
 Sign in to Holvi in Chrome. Open the company group and then its payment account
@@ -64,7 +65,7 @@ transaction feed. Copy:
 Register the native host with the capabilities required by the agent:
 
 ```sh
-holvi-agent-bridge install \
+holvi install \
   --group-url 'https://account.app.holvi.com/group/AbC123+example-company/' \
   --account '11111111-1111-4111-8111-111111111111' \
   --capability transactions.read \
@@ -77,7 +78,7 @@ A read-only installation omits `attachments.write` and does not need a receipt
 root:
 
 ```sh
-holvi-agent-bridge install \
+holvi install \
   --group-url 'https://account.app.holvi.com/group/AbC123+example-company/' \
   --account '11111111-1111-4111-8111-111111111111' \
   --capability transactions.read \
@@ -99,7 +100,7 @@ signed-in Holvi group tab after loading the extension.
 Verify the complete path from the CLI through Chrome to Holvi:
 
 ```sh
-holvi-agent-bridge doctor
+holvi doctor
 ```
 
 ## Transaction and receipt workflow
@@ -107,13 +108,13 @@ holvi-agent-bridge doctor
 List all transactions in a date range:
 
 ```sh
-holvi-agent-bridge transactions --from 2026-07-01 --to 2026-07-31 --json
+holvi transactions --from 2026-07-01 --to 2026-07-31 --json
 ```
 
 Add `--missing-attachments` to return only transactions that have no attachment:
 
 ```sh
-holvi-agent-bridge transactions --from 2026-07-01 --to 2026-07-31 \
+holvi transactions --from 2026-07-01 --to 2026-07-31 \
   --missing-attachments --json
 ```
 
@@ -123,7 +124,7 @@ until Holvi creates the debt record used for attachments. Inspect the exact debt
 before selecting a receipt:
 
 ```sh
-holvi-agent-bridge preview \
+holvi preview \
   --debt '11111111-1111-4111-8111-111111111111'
 ```
 
@@ -131,7 +132,7 @@ Run an upload without `--yes` first. This checks the transaction and local file
 without changing Holvi:
 
 ```sh
-holvi-agent-bridge upload \
+holvi upload \
   --debt '11111111-1111-4111-8111-111111111111' \
   --file '/absolute/path/to/receipts/example.pdf'
 ```
@@ -139,7 +140,7 @@ holvi-agent-bridge upload \
 After verifying the dry-run output, perform the upload:
 
 ```sh
-holvi-agent-bridge upload \
+holvi upload \
   --debt '11111111-1111-4111-8111-111111111111' \
   --file '/absolute/path/to/receipts/example.pdf' \
   --yes
@@ -241,12 +242,12 @@ when updating the bridge.
 
 ## Development
 
-Run strict type checking, build the Chrome and Node.js output, and execute the
+Run strict type checking, build the Chrome and Bun output, and execute the
 tests:
 
 ```sh
-npm run check
-npm test
+bun run check
+bun run test
 ```
 
 Chrome loads `dist/extension`. The native host runs `dist/native/host.js`.
