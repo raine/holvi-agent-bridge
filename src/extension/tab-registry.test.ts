@@ -26,8 +26,9 @@ const runtimeConfig = {
 interface FakePort {
   port: chrome.runtime.Port;
   messages: unknown[];
+  localDisconnects: number;
   contentListeners: Array<(message: unknown) => void>;
-  disconnectListeners: Array<() => void>;
+  remoteDisconnect: () => void;
 }
 
 function fakePort(
@@ -37,24 +38,31 @@ function fakePort(
   const messages: unknown[] = [];
   const contentListeners: Array<(message: unknown) => void> = [];
   const disconnectListeners: Array<() => void> = [];
-  const port = {
-    name: "holvi-tab",
-    sender: { tab: { id: tabId, url } },
-    postMessage: (message: unknown) => messages.push(message),
-    disconnect: () => {
-      for (const listener of disconnectListeners) {
-        listener();
-      }
+  const fake: FakePort = {
+    port: {
+      name: "holvi-tab",
+      sender: { tab: { id: tabId, url } },
+      postMessage: (message: unknown) => messages.push(message),
+      disconnect: () => {
+        fake.localDisconnects += 1;
+      },
+      onMessage: {
+        addListener: (listener: (message: unknown) => void) =>
+          contentListeners.push(listener),
+      },
+      onDisconnect: {
+        addListener: (listener: () => void) =>
+          disconnectListeners.push(listener),
+      },
+    } as unknown as chrome.runtime.Port,
+    messages,
+    localDisconnects: 0,
+    contentListeners,
+    remoteDisconnect: () => {
+      for (const listener of disconnectListeners) listener();
     },
-    onMessage: {
-      addListener: (listener: (message: unknown) => void) =>
-        contentListeners.push(listener),
-    },
-    onDisconnect: {
-      addListener: (listener: () => void) => disconnectListeners.push(listener),
-    },
-  } as unknown as chrome.runtime.Port;
-  return { port, messages, contentListeners, disconnectListeners };
+  };
+  return fake;
 }
 
 function authResponse(
@@ -135,10 +143,58 @@ describe("tab authentication", () => {
     tabs.register(connection.port);
 
     const authPromise = tabs.requestAuth();
-    connection.port.disconnect();
+    connection.remoteDisconnect();
 
     await expect(authPromise).rejects.toThrow("Holvi tab disconnected");
     expect(stateChanges).toBe(1);
+    expect(tabs.size).toBe(0);
+  });
+
+  test("rejects pending authentication when a tab connection is replaced", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const staleConnection = fakePort();
+    const replacement = fakePort();
+    const tabs = new TabRegistry(staticConfig, session, {
+      connectionAvailable: () => {},
+      stateChanged: () => {},
+    });
+    tabs.register(staleConnection.port);
+
+    const staleAuth = tabs.requestAuth();
+    tabs.register(replacement.port);
+
+    await expect(staleAuth).rejects.toThrow("Holvi tab disconnected");
+    expect(staleConnection.localDisconnects).toBe(1);
+    expect(tabs.size).toBe(1);
+
+    const replacementAuth = tabs.requestAuth();
+    const request = replacement.messages[0] as { requestId: string };
+    replacement.contentListeners[0]!(authResponse(request.requestId));
+    await expect(replacementAuth).resolves.toEqual({
+      token: `${"a".repeat(12)}.${"b".repeat(12)}.${"c".repeat(12)}`,
+      csrfToken: "csrf-token",
+    });
+  });
+
+  test("removes a tab that reports an invalid location", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const connection = fakePort();
+    const tabs = new TabRegistry(staticConfig, session, {
+      connectionAvailable: () => {},
+      stateChanged: () => {},
+    });
+    tabs.register(connection.port);
+
+    const authPromise = tabs.requestAuth();
+    connection.contentListeners[0]!({
+      type: "tab_hello",
+      href: "https://example.test/invalid",
+    });
+
+    await expect(authPromise).rejects.toThrow("Holvi tab disconnected");
+    expect(connection.localDisconnects).toBe(1);
     expect(tabs.size).toBe(0);
   });
 });

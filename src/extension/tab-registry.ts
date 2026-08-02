@@ -60,7 +60,11 @@ export class TabRegistry {
     }
 
     const validTabId = tabId as number;
-    this.connections.get(validTabId)?.port.disconnect();
+    const stalePort = this.connections.get(validTabId)?.port;
+    if (stalePort) {
+      this.removeConnection(validTabId, stalePort);
+      stalePort.disconnect();
+    }
     this.connections.set(validTabId, { port, href, groupPathSegment });
     port.onMessage.addListener((message) =>
       this.handleContentMessage(validTabId, message),
@@ -118,7 +122,10 @@ export class TabRegistry {
       );
       const connection = this.connections.get(tabId);
       if (!connection || !groupPathSegment) {
-        connection?.port.disconnect();
+        if (connection) {
+          this.disconnect(tabId, connection.port);
+          connection.port.disconnect();
+        }
         return;
       }
       connection.href = message.href || "";
@@ -173,9 +180,9 @@ export class TabRegistry {
     });
   }
 
-  private disconnect(tabId: number, port: chrome.runtime.Port): void {
+  private removeConnection(tabId: number, port: chrome.runtime.Port): boolean {
     if (this.connections.get(tabId)?.port !== port) {
-      return;
+      return false;
     }
     this.connections.delete(tabId);
     for (const [requestId, pending] of this.authRequests) {
@@ -185,6 +192,12 @@ export class TabRegistry {
         this.authRequests.delete(requestId);
       }
     }
-    this.events.stateChanged();
+    return true;
+  }
+
+  private disconnect(tabId: number, port: chrome.runtime.Port): void {
+    if (this.removeConnection(tabId, port)) {
+      this.events.stateChanged();
+    }
   }
 }

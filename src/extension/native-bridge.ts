@@ -60,24 +60,10 @@ export class NativeBridge {
       return;
     }
 
-    this.nativePort = chrome.runtime.connectNative(
-      this.staticConfig.nativeHostName,
-    );
-    this.nativePort.onMessage.addListener((message) =>
-      this.handleMessage(message),
-    );
-    this.nativePort.onDisconnect.addListener(() => {
-      this.nativePort = null;
-      this.session.clear();
-      this.uploadTransfers.cancel();
-      this.clearUploadExpiry();
-      if (this.tabs.size > 0 && this.reconnectTimer === null) {
-        this.reconnectTimer = self.setTimeout(() => {
-          this.reconnectTimer = null;
-          this.connect();
-        }, nativeReconnectDelayMs);
-      }
-    });
+    const port = chrome.runtime.connectNative(this.staticConfig.nativeHostName);
+    this.nativePort = port;
+    port.onMessage.addListener((message) => this.handleMessage(message));
+    port.onDisconnect.addListener(() => this.disconnect(port));
   }
 
   reportTabState(): void {
@@ -90,6 +76,22 @@ export class NativeBridge {
         ? { type: nativeMessageType.tabReady, tabId: tab[0] }
         : { type: nativeMessageType.tabUnavailable },
     );
+  }
+
+  private disconnect(port: chrome.runtime.Port): void {
+    if (this.nativePort !== port) {
+      return;
+    }
+    this.nativePort = null;
+    this.session.clear();
+    this.uploadTransfers.cancel();
+    this.clearUploadExpiry();
+    if (this.tabs.size > 0 && this.reconnectTimer === null) {
+      this.reconnectTimer = self.setTimeout(() => {
+        this.reconnectTimer = null;
+        this.connect();
+      }, nativeReconnectDelayMs);
+    }
   }
 
   private postNative(message: unknown): void {
@@ -151,7 +153,11 @@ export class NativeBridge {
     }
 
     if (message.type === nativeMessageType.hostRestart) {
-      this.nativePort?.disconnect();
+      const port = this.nativePort;
+      if (port) {
+        this.disconnect(port);
+        port.disconnect();
+      }
       return;
     }
 

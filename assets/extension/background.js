@@ -841,20 +841,10 @@
       if (this.nativePort || this.tabs.size === 0) {
         return;
       }
-      this.nativePort = chrome.runtime.connectNative(this.staticConfig.nativeHostName);
-      this.nativePort.onMessage.addListener((message) => this.handleMessage(message));
-      this.nativePort.onDisconnect.addListener(() => {
-        this.nativePort = null;
-        this.session.clear();
-        this.uploadTransfers.cancel();
-        this.clearUploadExpiry();
-        if (this.tabs.size > 0 && this.reconnectTimer === null) {
-          this.reconnectTimer = self.setTimeout(() => {
-            this.reconnectTimer = null;
-            this.connect();
-          }, nativeReconnectDelayMs);
-        }
-      });
+      const port = chrome.runtime.connectNative(this.staticConfig.nativeHostName);
+      this.nativePort = port;
+      port.onMessage.addListener((message) => this.handleMessage(message));
+      port.onDisconnect.addListener(() => this.disconnect(port));
     }
     reportTabState() {
       if (!this.nativePort || !this.session.optionalConfig) {
@@ -862,6 +852,21 @@
       }
       const tab = this.tabs.configuredTab();
       this.nativePort.postMessage(tab ? { type: nativeMessageType.tabReady, tabId: tab[0] } : { type: nativeMessageType.tabUnavailable });
+    }
+    disconnect(port) {
+      if (this.nativePort !== port) {
+        return;
+      }
+      this.nativePort = null;
+      this.session.clear();
+      this.uploadTransfers.cancel();
+      this.clearUploadExpiry();
+      if (this.tabs.size > 0 && this.reconnectTimer === null) {
+        this.reconnectTimer = self.setTimeout(() => {
+          this.reconnectTimer = null;
+          this.connect();
+        }, nativeReconnectDelayMs);
+      }
     }
     postNative(message) {
       if (!this.nativePort) {
@@ -904,7 +909,11 @@
         return;
       }
       if (message.type === nativeMessageType.hostRestart) {
-        this.nativePort?.disconnect();
+        const port = this.nativePort;
+        if (port) {
+          this.disconnect(port);
+          port.disconnect();
+        }
         return;
       }
       if (message.type === nativeMessageType.hostReady) {
@@ -997,7 +1006,11 @@
         return;
       }
       const validTabId = tabId;
-      this.connections.get(validTabId)?.port.disconnect();
+      const stalePort = this.connections.get(validTabId)?.port;
+      if (stalePort) {
+        this.removeConnection(validTabId, stalePort);
+        stalePort.disconnect();
+      }
       this.connections.set(validTabId, { port, href, groupPathSegment });
       port.onMessage.addListener((message) => this.handleContentMessage(validTabId, message));
       port.onDisconnect.addListener(() => this.disconnect(validTabId, port));
@@ -1040,7 +1053,10 @@
         const groupPathSegment = groupPathSegmentFromUrl(message.href || "", this.staticConfig.accountOrigin);
         const connection = this.connections.get(tabId);
         if (!connection || !groupPathSegment) {
-          connection?.port.disconnect();
+          if (connection) {
+            this.disconnect(tabId, connection.port);
+            connection.port.disconnect();
+          }
           return;
         }
         connection.href = message.href || "";
@@ -1073,9 +1089,9 @@
         csrfToken: typeof message.csrfToken === "string" ? message.csrfToken : ""
       });
     }
-    disconnect(tabId, port) {
+    removeConnection(tabId, port) {
       if (this.connections.get(tabId)?.port !== port) {
-        return;
+        return false;
       }
       this.connections.delete(tabId);
       for (const [requestId, pending] of this.authRequests) {
@@ -1085,7 +1101,12 @@
           this.authRequests.delete(requestId);
         }
       }
-      this.events.stateChanged();
+      return true;
+    }
+    disconnect(tabId, port) {
+      if (this.removeConnection(tabId, port)) {
+        this.events.stateChanged();
+      }
     }
   }
 

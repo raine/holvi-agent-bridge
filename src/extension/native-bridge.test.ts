@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { StaticBridgeConfig } from "./background-types.js";
 import type { CommandService } from "./commands.js";
-import { NativeBridge } from "./native-bridge.js";
+import { NativeBridge, nativeReconnectDelayMs } from "./native-bridge.js";
 import { BridgeSession } from "./session.js";
 import type { TabRegistry } from "./tab-registry.js";
 import type { UploadWorkflow } from "./upload-workflow.js";
@@ -29,19 +29,20 @@ const runtimeConfig = {
 interface FakeNativePort {
   port: chrome.runtime.Port;
   messages: unknown[];
+  localDisconnects: number;
   emit: (message: unknown) => void;
-  disconnect: () => void;
+  remoteDisconnect: () => void;
 }
 
 function fakeNativePort(): FakeNativePort {
   const messages: unknown[] = [];
   const messageListeners: Array<(message: unknown) => void> = [];
   const disconnectListeners: Array<() => void> = [];
-  return {
+  const fake: FakeNativePort = {
     port: {
       postMessage: (message: unknown) => messages.push(message),
       disconnect: () => {
-        for (const listener of disconnectListeners) listener();
+        fake.localDisconnects += 1;
       },
       onMessage: {
         addListener: (listener: (message: unknown) => void) =>
@@ -53,13 +54,15 @@ function fakeNativePort(): FakeNativePort {
       },
     } as unknown as chrome.runtime.Port,
     messages,
+    localDisconnects: 0,
     emit: (message) => {
       for (const listener of messageListeners) listener(message);
     },
-    disconnect: () => {
+    remoteDisconnect: () => {
       for (const listener of disconnectListeners) listener();
     },
   };
+  return fake;
 }
 
 function uploadStart(id: string) {
@@ -76,12 +79,14 @@ function uploadStart(id: string) {
 }
 
 describe("native bridge controller", () => {
-  test("releases an interrupted upload when the native transport closes", () => {
+  test("cleans up and reconnects after a host restart request", () => {
     const session = new BridgeSession(staticConfig);
     const ports = [fakeNativePort(), fakeNativePort()];
+    const reconnects: Array<() => void> = [];
     let tabCount = 1;
     let connection = 0;
     const originalChrome = globalThis.chrome;
+    const originalSetTimeout = self.setTimeout;
     Object.defineProperty(globalThis, "chrome", {
       configurable: true,
       value: {
@@ -89,6 +94,15 @@ describe("native bridge controller", () => {
           connectNative: () => ports[connection++]!.port,
         },
       },
+    });
+    Object.defineProperty(self, "setTimeout", {
+      configurable: true,
+      value: ((callback: () => void, delay: number) => {
+        if (delay === nativeReconnectDelayMs) {
+          reconnects.push(callback);
+        }
+        return 1;
+      }) as typeof self.setTimeout,
     });
 
     try {
@@ -114,13 +128,14 @@ describe("native bridge controller", () => {
         config: runtimeConfig,
       });
       ports[0]!.emit(uploadStart("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"));
-
-      tabCount = 0;
       ports[0]!.emit({ type: "host_restart" });
-      expect(session.optionalConfig).toBeNull();
 
-      tabCount = 1;
-      bridge.connect();
+      expect(ports[0]!.localDisconnects).toBe(1);
+      expect(session.optionalConfig).toBeNull();
+      expect(reconnects).toHaveLength(1);
+
+      reconnects[0]!();
+      expect(connection).toBe(2);
       ports[1]!.emit({
         type: "host_ready",
         protocolVersion: 1,
@@ -142,8 +157,12 @@ describe("native bridge controller", () => {
         error: "Receipt chunks arrived out of order or exceeded their limit.",
       });
       tabCount = 0;
-      ports[1]!.disconnect();
+      ports[1]!.remoteDisconnect();
     } finally {
+      Object.defineProperty(self, "setTimeout", {
+        configurable: true,
+        value: originalSetTimeout,
+      });
       Object.defineProperty(globalThis, "chrome", {
         configurable: true,
         value: originalChrome,
