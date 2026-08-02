@@ -63,12 +63,16 @@
     }
     async doctor(auth) {
       const config = this.session.optionalConfig;
+      const identity = this.session.identity;
       const base = {
         connected: true,
         groupPathSegment: config?.groupPathSegment,
         poolHandle: config?.poolHandle,
         paymentAccountUuid: config?.paymentAccountUuid,
-        capabilities: config?.capabilities
+        capabilities: config?.capabilities,
+        protocolVersion: identity.protocolVersion,
+        hostVersion: identity.hostVersion,
+        extensionVersion: this.session.extensionVersion
       };
       if (config?.capabilities.includes("transactions.read")) {
         this.session.requireCapabilities("transactions.read");
@@ -451,6 +455,16 @@
       return "";
     }
   }
+  function validateHostIdentity(protocolVersion, hostVersion, staticConfig) {
+    if (protocolVersion !== staticConfig.nativeProtocolVersion) {
+      const receivedProtocol = typeof protocolVersion === "number" ? protocolVersion : "unknown";
+      throw new Error(`Native host protocol ${receivedProtocol} is incompatible with extension protocol ${staticConfig.nativeProtocolVersion}. Reload Holvi Agent Bridge in chrome://extensions or restart Chrome.`);
+    }
+    if (typeof hostVersion !== "string" || hostVersion.length < 1 || hostVersion.length > 64) {
+      throw new Error("The native host supplied an invalid build version.");
+    }
+    return { protocolVersion, hostVersion };
+  }
   function validateRuntimeConfig(value, staticConfig) {
     const config = value;
     const groupParts = (config.groupPathSegment || "").match(/^([^/+]+)\+([^/]+)$/);
@@ -470,16 +484,29 @@
   class BridgeSession {
     staticConfig;
     runtimeConfig = null;
+    hostIdentity = null;
     constructor(staticConfig) {
       this.staticConfig = staticConfig;
     }
-    configure(value) {
+    configure(value, protocolVersion = this.staticConfig.nativeProtocolVersion, hostVersion = this.staticConfig.extensionVersion) {
+      const identity = validateHostIdentity(protocolVersion, hostVersion, this.staticConfig);
       const config = validateRuntimeConfig(value, this.staticConfig);
+      this.hostIdentity = identity;
       this.runtimeConfig = config;
       return config;
     }
     clear() {
       this.runtimeConfig = null;
+      this.hostIdentity = null;
+    }
+    get identity() {
+      if (!this.hostIdentity) {
+        throw new Error("The local bridge has no native host identity.");
+      }
+      return this.hostIdentity;
+    }
+    get extensionVersion() {
+      return this.staticConfig.extensionVersion;
     }
     get optionalConfig() {
       return this.runtimeConfig;
@@ -759,17 +786,20 @@
   var nativeReconnectDelayMs = 1000;
   var nativeMessageType = Object.freeze({
     hostReady: "host_ready",
+    hostRestart: "host_restart",
     command: "command",
     uploadStart: "upload_start",
     uploadChunk: "upload_chunk",
     uploadEnd: "upload_end",
     tabReady: "tab_ready",
     tabUnavailable: "tab_unavailable",
+    hostRejected: "host_rejected",
     result: "result"
   });
   var nativeMessageTypes = Object.freeze({
     hostToExtension: [
       nativeMessageType.hostReady,
+      nativeMessageType.hostRestart,
       nativeMessageType.command,
       nativeMessageType.uploadStart,
       nativeMessageType.uploadChunk,
@@ -778,6 +808,7 @@
     extensionToHost: [
       nativeMessageType.tabReady,
       nativeMessageType.tabUnavailable,
+      nativeMessageType.hostRejected,
       nativeMessageType.result
     ]
   });
@@ -865,12 +896,20 @@
       if (!message || typeof message !== "object") {
         return;
       }
+      if (message.type === nativeMessageType.hostRestart) {
+        this.nativePort?.disconnect();
+        return;
+      }
       if (message.type === nativeMessageType.hostReady) {
         try {
-          this.session.configure(message.config);
+          this.session.configure(message.config, message.protocolVersion, message.hostVersion);
           this.reportTabState();
-        } catch (_error) {
-          this.nativePort?.disconnect();
+        } catch (error) {
+          this.session.clear();
+          this.nativePort?.postMessage({
+            type: nativeMessageType.hostRejected,
+            error: error instanceof Error ? error.message : String(error)
+          });
         }
         return;
       }

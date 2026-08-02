@@ -11,6 +11,8 @@ const staticConfig: StaticBridgeConfig = {
   apiOrigin: "https://holvi.com",
   groupPathPrefix: "/group/",
   nativeHostName: "app.holvi_agent_bridge",
+  nativeProtocolVersion: 1,
+  extensionVersion: "0.1.0",
   maxFileBytes: 25 * 1024 * 1024,
   maxTransactionPages: 200,
   maxTransactionResults: 10_000,
@@ -105,16 +107,26 @@ describe("native bridge controller", () => {
       );
 
       bridge.connect();
-      ports[0]!.emit({ type: "host_ready", config: runtimeConfig });
+      ports[0]!.emit({
+        type: "host_ready",
+        protocolVersion: 1,
+        hostVersion: "0.1.0",
+        config: runtimeConfig,
+      });
       ports[0]!.emit(uploadStart("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"));
 
       tabCount = 0;
-      ports[0]!.disconnect();
+      ports[0]!.emit({ type: "host_restart" });
       expect(session.optionalConfig).toBeNull();
 
       tabCount = 1;
       bridge.connect();
-      ports[1]!.emit({ type: "host_ready", config: runtimeConfig });
+      ports[1]!.emit({
+        type: "host_ready",
+        protocolVersion: 1,
+        hostVersion: "0.1.0",
+        config: runtimeConfig,
+      });
       ports[1]!.emit(uploadStart("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"));
       ports[1]!.emit({
         type: "upload_chunk",
@@ -131,6 +143,52 @@ describe("native bridge controller", () => {
       });
       tabCount = 0;
       ports[1]!.disconnect();
+    } finally {
+      Object.defineProperty(globalThis, "chrome", {
+        configurable: true,
+        value: originalChrome,
+      });
+    }
+  });
+
+  test("reports incompatible host identity through the native port", () => {
+    const session = new BridgeSession(staticConfig);
+    const nativePort = fakeNativePort();
+    const originalChrome = globalThis.chrome;
+    Object.defineProperty(globalThis, "chrome", {
+      configurable: true,
+      value: { runtime: { connectNative: () => nativePort.port } },
+    });
+
+    try {
+      const tabs = {
+        size: 1,
+        configuredTab: () => [7, {}],
+      } as unknown as TabRegistry;
+      const bridge = new NativeBridge(
+        staticConfig,
+        session,
+        tabs,
+        {} as CommandService,
+        {} as UploadWorkflow,
+      );
+
+      bridge.connect();
+      nativePort.emit({
+        type: "host_ready",
+        protocolVersion: 2,
+        hostVersion: "0.1.0",
+        config: runtimeConfig,
+      });
+
+      expect(session.optionalConfig).toBeNull();
+      expect(nativePort.messages).toEqual([
+        {
+          type: "host_rejected",
+          error:
+            "Native host protocol 2 is incompatible with extension protocol 1. Reload Holvi Agent Bridge in chrome://extensions or restart Chrome.",
+        },
+      ]);
     } finally {
       Object.defineProperty(globalThis, "chrome", {
         configurable: true,

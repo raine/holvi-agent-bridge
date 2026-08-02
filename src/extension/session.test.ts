@@ -3,6 +3,7 @@ import type { StaticBridgeConfig } from "./background-types.js";
 import {
   BridgeSession,
   groupPathSegmentFromUrl,
+  validateHostIdentity,
   validateRuntimeConfig,
 } from "./session.js";
 
@@ -11,6 +12,8 @@ const staticConfig: StaticBridgeConfig = {
   apiOrigin: "https://holvi.com",
   groupPathPrefix: "/group/",
   nativeHostName: "app.holvi_agent_bridge",
+  nativeProtocolVersion: 1,
+  extensionVersion: "0.1.0",
   maxFileBytes: 25 * 1024 * 1024,
   maxTransactionPages: 200,
   maxTransactionResults: 10_000,
@@ -68,6 +71,23 @@ describe("bridge session", () => {
         staticConfig,
       ),
     ).toThrow("invalid Holvi account boundary");
+  });
+
+  test("rejects incompatible native host identities with recovery guidance", () => {
+    expect(validateHostIdentity(1, "0.1.0", staticConfig)).toEqual({
+      protocolVersion: 1,
+      hostVersion: "0.1.0",
+    });
+    expect(() => validateHostIdentity(2, "0.1.0", staticConfig)).toThrow(
+      "Native host protocol 2 is incompatible with extension protocol 1",
+    );
+    expect(validateHostIdentity(1, "0.2.0", staticConfig)).toEqual({
+      protocolVersion: 1,
+      hostVersion: "0.2.0",
+    });
+    expect(() => validateHostIdentity(1, "", staticConfig)).toThrow(
+      "invalid build version",
+    );
   });
 
   test("checks every required capability independently", () => {

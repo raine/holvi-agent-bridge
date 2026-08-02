@@ -3,9 +3,16 @@ export interface StaticBridgeConfig {
   apiOrigin: string;
   groupPathPrefix: string;
   nativeHostName: string;
+  nativeProtocolVersion: number;
+  extensionVersion: string;
   maxFileBytes: number;
   maxTransactionPages: number;
   maxTransactionResults: number;
+}
+
+export interface NativeHostIdentity {
+  protocolVersion: number;
+  hostVersion: string;
 }
 
 export interface RuntimeBridgeConfig {
@@ -27,6 +34,9 @@ export interface NativeMessage {
   action?: string;
   params?: Record<string, unknown>;
   config?: unknown;
+  protocolVersion?: number;
+  hostVersion?: string;
+  error?: string;
   debtUuid?: string;
   fileName?: string;
   mimeType?: string;

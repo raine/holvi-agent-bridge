@@ -2,6 +2,9 @@
   "versions": {
     "config": 2,
     "signedRequest": 1,
+    "nativeProtocol": 1,
+    "host": "0.1.0",
+    "extension": "0.1.0",
     "extensionManifest": 3
   },
   "identity": {
@@ -47,11 +50,12 @@
   "nativeMessaging": {
     "hostToExtension": [
       "host_ready",
+      "host_restart",
       "command",
       "upload_start",
       "upload_chunk",
       "upload_end"
     ],
-    "extensionToHost": ["tab_ready", "tab_unavailable", "result"]
+    "extensionToHost": ["tab_ready", "tab_unavailable", "host_rejected", "result"]
   }
 }

@@ -13,7 +13,8 @@ use super::socket::LocalSocket;
 use super::{LocalRequest, SocketReply};
 use crate::config::BridgeConfig;
 use crate::protocol::{
-    HOST_READY_MESSAGE, RESULT_MESSAGE, TAB_READY_MESSAGE, TAB_UNAVAILABLE_MESSAGE,
+    Action, HOST_BUILD_VERSION, HOST_READY_MESSAGE, HOST_REJECTED_MESSAGE, HOST_RESTART_MESSAGE,
+    NATIVE_PROTOCOL_VERSION, RESULT_MESSAGE, TAB_READY_MESSAGE, TAB_UNAVAILABLE_MESSAGE,
 };
 
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -31,6 +32,7 @@ struct ActiveRequest {
 #[derive(Default)]
 struct RuntimeState {
     tab_ready: bool,
+    host_error: Option<String>,
     active: Option<ActiveRequest>,
 }
 
@@ -56,6 +58,16 @@ impl RuntimeState {
         match message.get("type").and_then(Value::as_str) {
             Some(TAB_READY_MESSAGE) => self.tab_ready = true,
             Some(TAB_UNAVAILABLE_MESSAGE) => self.tab_ready = false,
+            Some(HOST_REJECTED_MESSAGE) => {
+                self.tab_ready = false;
+                self.host_error = Some(
+                    message
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("The extension rejected the native host.")
+                        .to_owned(),
+                );
+            }
             Some(RESULT_MESSAGE) => {
                 let Some(id) = message.get("id").and_then(Value::as_str) else {
                     return;
@@ -130,7 +142,12 @@ pub async fn run(config: BridgeConfig, socket: LocalSocket) -> Result<()> {
         tokio::spawn(socket.accept(config.hmac_secret.clone(), local, socket_shutdown_rx));
 
     native
-        .send(json!({"type": HOST_READY_MESSAGE, "config": config.public()}))
+        .send(json!({
+            "type": HOST_READY_MESSAGE,
+            "protocolVersion": NATIVE_PROTOCOL_VERSION,
+            "hostVersion": HOST_BUILD_VERSION,
+            "config": config.public(),
+        }))
         .await
         .context("Chrome native output closed.")?;
 
@@ -277,6 +294,36 @@ impl HostRuntime {
     }
 
     fn handle_local(&mut self, incoming: LocalRequest) {
+        if matches!(&incoming.request.action, Action::HostRestart(_)) {
+            if self.state.active.is_some() {
+                let _ = incoming.reply.send(json!({
+                    "ok": false,
+                    "error": "Another Holvi Agent Bridge request is active.",
+                }));
+                return;
+            }
+            if self
+                .native
+                .try_send(json!({"type": HOST_RESTART_MESSAGE}))
+                .is_err()
+            {
+                let _ = incoming.reply.send(json!({
+                    "ok": false,
+                    "error": "Unable to request an extension reconnect.",
+                }));
+                return;
+            }
+            let _ = incoming
+                .reply
+                .send(json!({"ok": true, "data": {"restarting": true}}));
+            return;
+        }
+
+        if let Some(error) = &self.state.host_error {
+            let _ = incoming.reply.send(json!({"ok": false, "error": error}));
+            return;
+        }
+
         if let Err(error) = dispatch::validate(
             &incoming.request,
             &self.config,

@@ -1,5 +1,6 @@
 import { minimumFileBytes, supportedCapabilities } from "./policy.js";
 import type {
+  NativeHostIdentity,
   RuntimeBridgeConfig,
   StaticBridgeConfig,
 } from "./background-types.js";
@@ -21,6 +22,28 @@ export function groupPathSegmentFromUrl(
   } catch {
     return "";
   }
+}
+
+export function validateHostIdentity(
+  protocolVersion: unknown,
+  hostVersion: unknown,
+  staticConfig: StaticBridgeConfig,
+): NativeHostIdentity {
+  if (protocolVersion !== staticConfig.nativeProtocolVersion) {
+    const receivedProtocol =
+      typeof protocolVersion === "number" ? protocolVersion : "unknown";
+    throw new Error(
+      `Native host protocol ${receivedProtocol} is incompatible with extension protocol ${staticConfig.nativeProtocolVersion}. Reload Holvi Agent Bridge in chrome://extensions or restart Chrome.`,
+    );
+  }
+  if (
+    typeof hostVersion !== "string" ||
+    hostVersion.length < 1 ||
+    hostVersion.length > 64
+  ) {
+    throw new Error("The native host supplied an invalid build version.");
+  }
+  return { protocolVersion, hostVersion } as NativeHostIdentity;
 }
 
 export function validateRuntimeConfig(
@@ -62,17 +85,40 @@ export function validateUuid(value: string, resource: string): string {
 
 export class BridgeSession {
   private runtimeConfig: RuntimeBridgeConfig | null = null;
+  private hostIdentity: NativeHostIdentity | null = null;
 
   constructor(private readonly staticConfig: StaticBridgeConfig) {}
 
-  configure(value: unknown): RuntimeBridgeConfig {
+  configure(
+    value: unknown,
+    protocolVersion: unknown = this.staticConfig.nativeProtocolVersion,
+    hostVersion: unknown = this.staticConfig.extensionVersion,
+  ): RuntimeBridgeConfig {
+    const identity = validateHostIdentity(
+      protocolVersion,
+      hostVersion,
+      this.staticConfig,
+    );
     const config = validateRuntimeConfig(value, this.staticConfig);
+    this.hostIdentity = identity;
     this.runtimeConfig = config;
     return config;
   }
 
   clear(): void {
     this.runtimeConfig = null;
+    this.hostIdentity = null;
+  }
+
+  get identity(): NativeHostIdentity {
+    if (!this.hostIdentity) {
+      throw new Error("The local bridge has no native host identity.");
+    }
+    return this.hostIdentity;
+  }
+
+  get extensionVersion(): string {
+    return this.staticConfig.extensionVersion;
   }
 
   get optionalConfig(): RuntimeBridgeConfig | null {

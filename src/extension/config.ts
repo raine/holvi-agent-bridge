@@ -3,6 +3,8 @@ interface HolviBridgeStaticConfig {
   apiOrigin: string;
   groupPathPrefix: string;
   nativeHostName: string;
+  nativeProtocolVersion: number;
+  extensionVersion: string;
   maxFileBytes: number;
   maxTransactionPages: number;
   maxTransactionResults: number;
@@ -15,6 +17,8 @@ _HOLVI_AGENT_BRIDGE_STATIC_CONFIG = Object.freeze({
   apiOrigin: "https://holvi.com",
   groupPathPrefix: "/group/",
   nativeHostName: "app.holvi_agent_bridge",
+  nativeProtocolVersion: 1,
+  extensionVersion: "0.1.0",
   maxFileBytes: 26214400,
   maxTransactionPages: 200,
   maxTransactionResults: 10_000,

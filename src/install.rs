@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use rand::RngCore;
@@ -13,9 +15,10 @@ use serde_json::json;
 use crate::config::{
     BridgeConfig, CONFIG_VERSION, DEFAULT_MAX_FILE_BYTES, EXTENSION_ID, EXTENSION_ORIGIN,
     HOST_NAME, SUPPORTED_CAPABILITIES, default_config_path, is_lower_hex, parse_group_url,
-    validate_uuid,
+    socket_path, validate_uuid,
 };
-use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_regular_file};
+use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_regular_file, is_socket};
+use crate::protocol::{Action, EmptyParams, sign_request};
 use crate::receipt_sandbox::resolve_receipt_root;
 
 const EXTENSION_FILES: [(&str, &[u8]); 4] = [
@@ -42,6 +45,14 @@ pub struct InstallOptions {
     pub receipt_roots: Vec<PathBuf>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum HostRestartStatus {
+    NotRunning,
+    Requested,
+    ManualRequired,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallResult {
@@ -49,6 +60,7 @@ pub struct InstallResult {
     pub(crate) extension_id: &'static str,
     pub(crate) extension_path: PathBuf,
     pub(crate) native_host_manifest: PathBuf,
+    pub(crate) host_restart: HostRestartStatus,
 }
 
 pub fn install_bridge(options: InstallOptions) -> Result<InstallResult> {
@@ -62,13 +74,15 @@ pub fn install_bridge(options: InstallOptions) -> Result<InstallResult> {
         .context("Unable to locate the Holvi executable.")?
         .canonicalize()
         .context("Unable to resolve the Holvi executable path.")?;
-    install_bridge_with_layout(
+    let mut result = install_bridge_with_layout(
         options,
-        config_path,
+        config_path.clone(),
         extension_path,
         manifest_directory,
         executable,
-    )
+    )?;
+    result.host_restart = restart_active_host_at(&config_path, &socket_path());
+    Ok(result)
 }
 
 fn install_bridge_with_layout(
@@ -156,6 +170,7 @@ fn install_bridge_with_layout(
         extension_id: EXTENSION_ID,
         extension_path,
         native_host_manifest,
+        host_restart: HostRestartStatus::NotRunning,
     })
 }
 
@@ -170,6 +185,59 @@ fn chrome_manifest_directory() -> Result<PathBuf> {
         Ok(root.join("google-chrome/NativeMessagingHosts"))
     } else {
         bail!("The installer supports Google Chrome on macOS and Linux.")
+    }
+}
+
+fn restart_active_host_at(config_path: &Path, target: &Path) -> HostRestartStatus {
+    let metadata = match fs::symlink_metadata(target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return HostRestartStatus::NotRunning;
+        }
+        Err(_) => return HostRestartStatus::ManualRequired,
+    };
+    if !is_socket(&metadata) || !has_mode_0600(&metadata) || !is_owned_by_current_user(&metadata) {
+        return HostRestartStatus::ManualRequired;
+    }
+    let Some(secret) = reusable_secret(config_path) else {
+        return HostRestartStatus::ManualRequired;
+    };
+    let Ok(request) = sign_request(&secret, Action::HostRestart(EmptyParams {})) else {
+        return HostRestartStatus::ManualRequired;
+    };
+    let mut stream = match UnixStream::connect(target) {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return HostRestartStatus::NotRunning;
+        }
+        Err(_) => return HostRestartStatus::ManualRequired,
+    };
+    let timeout = Some(Duration::from_secs(2));
+    if stream.set_read_timeout(timeout).is_err() || stream.set_write_timeout(timeout).is_err() {
+        return HostRestartStatus::ManualRequired;
+    }
+    if serde_json::to_writer(&mut stream, &request).is_err()
+        || stream.write_all(b"\n").is_err()
+        || stream.flush().is_err()
+    {
+        return HostRestartStatus::ManualRequired;
+    }
+    let mut response = String::new();
+    if BufReader::new(stream).read_line(&mut response).is_err() {
+        return HostRestartStatus::ManualRequired;
+    }
+    let Ok(response) = serde_json::from_str::<serde_json::Value>(&response) else {
+        return HostRestartStatus::ManualRequired;
+    };
+    if response.get("ok") == Some(&serde_json::Value::Bool(true)) {
+        HostRestartStatus::Requested
+    } else {
+        HostRestartStatus::ManualRequired
     }
 }
 
@@ -518,6 +586,39 @@ mod tests {
 
         fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(reusable_secret(&config_path), Some(secret));
+    }
+
+    #[test]
+    fn requests_restart_over_the_authenticated_socket() {
+        let temporary = tempdir().unwrap();
+        let config_path = temporary.path().join("config.json");
+        let socket_path = temporary.path().join("bridge.sock");
+        let secret = "a".repeat(64);
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({"hmacSecret": secret})).unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(request["action"], "host.restart");
+            assert!(request["mac"].as_str().is_some_and(|mac| mac.len() == 64));
+            stream.write_all(b"{\"ok\":true}\n").unwrap();
+        });
+
+        assert_eq!(
+            restart_active_host_at(&config_path, &socket_path),
+            HostRestartStatus::Requested
+        );
+        server.join().unwrap();
     }
 
     #[test]

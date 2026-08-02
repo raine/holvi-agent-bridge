@@ -14,17 +14,20 @@ const requestIdPattern = /^[0-9a-f-]{16,64}$/i;
 export const nativeReconnectDelayMs = 1000;
 const nativeMessageType = Object.freeze({
   hostReady: "host_ready",
+  hostRestart: "host_restart",
   command: "command",
   uploadStart: "upload_start",
   uploadChunk: "upload_chunk",
   uploadEnd: "upload_end",
   tabReady: "tab_ready",
   tabUnavailable: "tab_unavailable",
+  hostRejected: "host_rejected",
   result: "result",
 });
 export const nativeMessageTypes = Object.freeze({
   hostToExtension: [
     nativeMessageType.hostReady,
+    nativeMessageType.hostRestart,
     nativeMessageType.command,
     nativeMessageType.uploadStart,
     nativeMessageType.uploadChunk,
@@ -33,6 +36,7 @@ export const nativeMessageTypes = Object.freeze({
   extensionToHost: [
     nativeMessageType.tabReady,
     nativeMessageType.tabUnavailable,
+    nativeMessageType.hostRejected,
     nativeMessageType.result,
   ],
 });
@@ -146,12 +150,25 @@ export class NativeBridge {
       return;
     }
 
+    if (message.type === nativeMessageType.hostRestart) {
+      this.nativePort?.disconnect();
+      return;
+    }
+
     if (message.type === nativeMessageType.hostReady) {
       try {
-        this.session.configure(message.config);
+        this.session.configure(
+          message.config,
+          message.protocolVersion,
+          message.hostVersion,
+        );
         this.reportTabState();
-      } catch (_error) {
-        this.nativePort?.disconnect();
+      } catch (error) {
+        this.session.clear();
+        this.nativePort?.postMessage({
+          type: nativeMessageType.hostRejected,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       return;
     }

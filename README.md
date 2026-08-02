@@ -278,8 +278,13 @@ holvi install \
 
 `attachments.write` requires at least one receipt root. The default completion
 report shows the config path, stable extension ID, unpacked extension path,
-native host manifest path, and next steps. Use `--json` for the same installation
-paths in a machine-readable object.
+native host manifest path, active-host restart status, and next steps. Installation
+sends a signed restart request to an idle native host, and the extension reconnects
+to the executable registered in the installed manifest. A busy host or a host
+without restart-control support produces `manualRequired` restart status. Reload the unpacked extension in
+`chrome://extensions` after every installation so Chrome activates its installed
+JavaScript artifacts. Use `--json` for the installation result as a
+machine-readable object.
 
 ### `holvi skill`
 
@@ -355,8 +360,10 @@ to Chrome or Holvi.
 
 ### `holvi doctor`
 
-Verifies config loading, Native Messaging, the configured Holvi tab, session
-authentication, and one API probe selected from enabled capabilities.
+Verifies config loading, Native Messaging, native protocol compatibility, host and
+extension build versions, the configured Holvi tab, session authentication,
+runtime account scope, capability scope, and one API probe selected from enabled
+capabilities.
 
 ```sh
 holvi doctor [--json]
@@ -567,9 +574,13 @@ One Rust executable serves two entry paths:
   Messaging host
 
 The host owns the authenticated Unix socket, capability checks, nonce cache,
-request timeout, and Native Messaging framing. Uploads use 480 KiB chunks,
-SHA-256 end-to-end verification, a 25 MiB default limit, explicit confirmation,
-and read-before-write and read-after-write checks in the extension.
+request timeout, and Native Messaging framing. The host-ready handshake carries
+the native protocol and host build versions. The extension rejects incompatible
+protocols and reports its own build version through `holvi doctor`. A signed
+`host.restart` control request asks the extension to disconnect and reconnect its
+Native Messaging port. Uploads use 480 KiB chunks, SHA-256 end-to-end
+verification, a 25 MiB default limit, explicit confirmation, and
+read-before-write and read-after-write checks in the extension.
 
 The compiled extension files live in `assets/extension` so `cargo install` and
 Nix packages can embed them. `src/extension` remains the TypeScript source of

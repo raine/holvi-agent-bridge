@@ -17,6 +17,8 @@ interface SharedStaticConfig {
   accountOrigin: string;
   apiOrigin: string;
   nativeHostName: string;
+  nativeProtocolVersion: number;
+  extensionVersion: string;
   maxFileBytes: number;
 }
 
@@ -37,6 +39,10 @@ async function staticConfig(): Promise<SharedStaticConfig> {
     accountOrigin: sourceConfigValue(source, "accountOrigin"),
     apiOrigin: sourceConfigValue(source, "apiOrigin"),
     nativeHostName: sourceConfigValue(source, "nativeHostName"),
+    nativeProtocolVersion: Number(
+      sourceConfigValue(source, "nativeProtocolVersion"),
+    ),
+    extensionVersion: sourceConfigValue(source, "extensionVersion"),
     maxFileBytes: Number(sourceConfigValue(source, "maxFileBytes")),
   };
 }
@@ -74,6 +80,9 @@ describe("cross-language bridge contract", () => {
     expect(config.accountOrigin).toBe(contract.origins.account);
     expect(config.apiOrigin).toBe(contract.origins.api);
     expect(config.nativeHostName).toBe(contract.identity.nativeHostName);
+    expect(config.nativeProtocolVersion).toBe(contract.versions.nativeProtocol);
+    expect(config.extensionVersion).toBe(contract.versions.extension);
+    expect(extensionManifest.version).toBe(contract.versions.extension);
     expect(config.maxFileBytes).toBe(contract.fileBytes.max);
     expect(extensionManifest.manifest_version).toBe(
       contract.versions.extensionManifest,

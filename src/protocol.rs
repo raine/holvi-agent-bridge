@@ -13,6 +13,8 @@ use sha2::Sha256;
 use crate::config::{is_lower_hex, validate_uuid};
 
 pub const SIGNED_REQUEST_VERSION: u8 = 1;
+pub const NATIVE_PROTOCOL_VERSION: u8 = 1;
+pub const HOST_BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_NATIVE_INPUT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_NATIVE_OUTPUT_BYTES: usize = 1024 * 1024;
 pub const MAX_SOCKET_REQUEST_BYTES: usize = 128 * 1024;
@@ -20,24 +22,31 @@ pub const REQUEST_MAX_AGE_MS: u64 = 30_000;
 pub const AUDIT_LIMIT_MIN: u8 = 1;
 pub const AUDIT_LIMIT_MAX: u8 = 25;
 pub const HOST_READY_MESSAGE: &str = "host_ready";
+pub const HOST_RESTART_MESSAGE: &str = "host_restart";
 pub const COMMAND_MESSAGE: &str = "command";
 pub const UPLOAD_START_MESSAGE: &str = "upload_start";
 pub const UPLOAD_CHUNK_MESSAGE: &str = "upload_chunk";
 pub const UPLOAD_END_MESSAGE: &str = "upload_end";
 pub const TAB_READY_MESSAGE: &str = "tab_ready";
 pub const TAB_UNAVAILABLE_MESSAGE: &str = "tab_unavailable";
+pub const HOST_REJECTED_MESSAGE: &str = "host_rejected";
 pub const RESULT_MESSAGE: &str = "result";
 #[cfg(test)]
-pub const HOST_TO_EXTENSION_MESSAGES: [&str; 5] = [
+pub const HOST_TO_EXTENSION_MESSAGES: [&str; 6] = [
     HOST_READY_MESSAGE,
+    HOST_RESTART_MESSAGE,
     COMMAND_MESSAGE,
     UPLOAD_START_MESSAGE,
     UPLOAD_CHUNK_MESSAGE,
     UPLOAD_END_MESSAGE,
 ];
 #[cfg(test)]
-pub const EXTENSION_TO_HOST_MESSAGES: [&str; 3] =
-    [TAB_READY_MESSAGE, TAB_UNAVAILABLE_MESSAGE, RESULT_MESSAGE];
+pub const EXTENSION_TO_HOST_MESSAGES: [&str; 4] = [
+    TAB_READY_MESSAGE,
+    TAB_UNAVAILABLE_MESSAGE,
+    HOST_REJECTED_MESSAGE,
+    RESULT_MESSAGE,
+];
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -118,6 +127,7 @@ pub struct AuditListParams {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    HostRestart(EmptyParams),
     Doctor(EmptyParams),
     Transactions(TransactionParams),
     Preview(DebtParams),
@@ -131,6 +141,7 @@ pub enum Action {
 impl Action {
     pub fn name(&self) -> &'static str {
         match self {
+            Self::HostRestart(_) => "host.restart",
             Self::Doctor(_) => "doctor",
             Self::Transactions(_) => "transactions",
             Self::Preview(_) => "preview",
@@ -144,9 +155,9 @@ impl Action {
 
     pub fn params(&self) -> Value {
         match self {
-            Self::Doctor(params) | Self::BookkeepingCategories(params) => {
-                serde_json::to_value(params)
-            }
+            Self::HostRestart(params)
+            | Self::Doctor(params)
+            | Self::BookkeepingCategories(params) => serde_json::to_value(params),
             Self::Transactions(params) => serde_json::to_value(params),
             Self::Preview(params)
             | Self::BookkeepingGet(params)
@@ -164,6 +175,7 @@ impl Action {
         }
 
         let action = match name {
+            "host.restart" => Self::HostRestart(decode(params)?),
             "doctor" => Self::Doctor(decode(params)?),
             "transactions" => {
                 let params: TransactionParams = decode(params)?;

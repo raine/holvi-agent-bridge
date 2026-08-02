@@ -15,7 +15,7 @@ pub const ACTION_CAPABILITIES: [(&str, &[&str]); 8] = [
 
 pub fn required_capabilities(action: &Action) -> &'static [&'static str] {
     match action {
-        Action::Doctor(_) => &[],
+        Action::HostRestart(_) | Action::Doctor(_) => &[],
         Action::Transactions(_) | Action::Preview(_) => &["transactions.read"],
         Action::Upload(_) => &["transactions.read", "attachments.write"],
         Action::BookkeepingGet(_)

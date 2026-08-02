@@ -8,6 +8,8 @@ const staticConfig: StaticBridgeConfig = {
   apiOrigin: "https://holvi.com",
   groupPathPrefix: "/group/",
   nativeHostName: "app.holvi_agent_bridge",
+  nativeProtocolVersion: 1,
+  extensionVersion: "0.1.0",
   maxFileBytes: 25 * 1024 * 1024,
   maxTransactionPages: 200,
   maxTransactionResults: 10_000,

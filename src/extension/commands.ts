@@ -57,12 +57,16 @@ export class CommandService {
 
   private async doctor(auth: Auth): Promise<Record<string, unknown>> {
     const config = this.session.optionalConfig;
+    const identity = this.session.identity;
     const base = {
       connected: true,
       groupPathSegment: config?.groupPathSegment,
       poolHandle: config?.poolHandle,
       paymentAccountUuid: config?.paymentAccountUuid,
       capabilities: config?.capabilities,
+      protocolVersion: identity.protocolVersion,
+      hostVersion: identity.hostVersion,
+      extensionVersion: this.session.extensionVersion,
     };
     if (config?.capabilities.includes("transactions.read")) {
       this.session.requireCapabilities("transactions.read");

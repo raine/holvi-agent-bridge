@@ -16,12 +16,13 @@ use tokio::net::UnixStream;
 
 use crate::capabilities::{EnabledActions, enabled_actions};
 use crate::config::{
-    SUPPORTED_CAPABILITIES, config_path, load_config, socket_path, validate_uuid,
+    BridgeConfig, SUPPORTED_CAPABILITIES, config_path, load_config, socket_path, validate_uuid,
 };
 use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
-use crate::install::{InstallOptions, InstallResult, install_bridge};
+use crate::install::{HostRestartStatus, InstallOptions, InstallResult, install_bridge};
 use crate::protocol::{
-    Action, AuditListParams, DebtParams, EmptyParams, TransactionParams, UploadParams, sign_request,
+    Action, AuditListParams, DebtParams, EmptyParams, HOST_BUILD_VERSION, NATIVE_PROTOCOL_VERSION,
+    TransactionParams, UploadParams, sign_request,
 };
 use crate::receipt_sandbox::resolve_receipt_file;
 use crate::skill::{self, CodingAgentArg};
@@ -188,6 +189,9 @@ struct DoctorResult {
     pool_handle: String,
     payment_account_uuid: String,
     capabilities: Vec<String>,
+    protocol_version: Option<u8>,
+    host_version: Option<String>,
+    extension_version: Option<String>,
     probe_action: Option<String>,
     first_page_results: Option<usize>,
     category_count: Option<usize>,
@@ -269,10 +273,12 @@ pub async fn run() -> Result<()> {
         }
         Command::Doctor(args) => {
             let result = request_host(&config.hmac_secret, Action::Doctor(EmptyParams {})).await?;
+            let doctor: DoctorResult = serde_json::from_value(result.clone())?;
+            validate_doctor(&config, &doctor)?;
             if args.json {
                 print_json(&result)?;
             } else {
-                print!("{}", format_doctor(serde_json::from_value(result)?));
+                print!("{}", format_doctor(doctor));
             }
         }
         Command::Transactions(args) => {
@@ -479,6 +485,40 @@ async fn request_host(secret: &str, action: Action) -> Result<Value> {
     Ok(response)
 }
 
+fn validate_doctor(config: &BridgeConfig, doctor: &DoctorResult) -> Result<()> {
+    let protocol = doctor
+        .protocol_version
+        .map_or_else(|| "unknown".into(), |value| value.to_string());
+    ensure!(
+        doctor.protocol_version == Some(NATIVE_PROTOCOL_VERSION),
+        "Running native host protocol {protocol} is incompatible with CLI protocol \
+         {NATIVE_PROTOCOL_VERSION}. Reload Holvi Agent Bridge in chrome://extensions or restart \
+         Chrome."
+    );
+    ensure!(
+        doctor.host_version.as_deref() == Some(HOST_BUILD_VERSION),
+        "Running native host version {} differs from CLI version {HOST_BUILD_VERSION}. Reload \
+         Holvi Agent Bridge in chrome://extensions or restart Chrome.",
+        doctor.host_version.as_deref().unwrap_or("unknown")
+    );
+    ensure!(
+        doctor.extension_version.as_deref() == Some(HOST_BUILD_VERSION),
+        "Running extension version {} differs from CLI version {HOST_BUILD_VERSION}. Reload Holvi \
+         Agent Bridge in chrome://extensions or restart Chrome.",
+        doctor.extension_version.as_deref().unwrap_or("unknown")
+    );
+    ensure!(
+        doctor.connected
+            && doctor.group_path_segment == config.group_path_segment
+            && doctor.pool_handle == config.pool_handle
+            && doctor.payment_account_uuid == config.payment_account_uuid
+            && doctor.capabilities == config.capabilities,
+        "Running native host account scope differs from the local config. Reload Holvi Agent \
+         Bridge in chrome://extensions or restart Chrome."
+    );
+    Ok(())
+}
+
 fn write_heading(output: &mut String, title: &str) {
     writeln!(output, "{title}").unwrap();
     writeln!(output, "{}", "-".repeat(title.chars().count())).unwrap();
@@ -509,6 +549,20 @@ fn format_install(result: &InstallResult) -> String {
         "ok",
         "native host",
         &result.native_host_manifest.to_string_lossy(),
+    );
+    write_status(
+        &mut output,
+        match result.host_restart {
+            HostRestartStatus::Requested => "ok",
+            HostRestartStatus::NotRunning => "..",
+            HostRestartStatus::ManualRequired => "!!",
+        },
+        "active host",
+        match result.host_restart {
+            HostRestartStatus::Requested => "restart requested",
+            HostRestartStatus::NotRunning => "starts on demand",
+            HostRestartStatus::ManualRequired => "extension reload required",
+        },
     );
     output.push('\n');
     write_heading(&mut output, "Next steps");
@@ -569,6 +623,26 @@ fn format_doctor(doctor: DoctorResult) -> String {
         },
     );
     write_status(&mut output, "ok", "Holvi session", "authenticated");
+    write_status(
+        &mut output,
+        "ok",
+        "native protocol",
+        &doctor
+            .protocol_version
+            .map_or_else(|| "unknown".into(), |value| value.to_string()),
+    );
+    write_status(
+        &mut output,
+        "ok",
+        "host version",
+        doctor.host_version.as_deref().unwrap_or("unknown"),
+    );
+    write_status(
+        &mut output,
+        "ok",
+        "extension version",
+        doctor.extension_version.as_deref().unwrap_or("unknown"),
+    );
 
     output.push('\n');
     write_heading(&mut output, "Account");
@@ -858,6 +932,9 @@ mod tests {
             pool_handle: "example-company".into(),
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
             capabilities: vec!["transactions.read".into()],
+            protocol_version: Some(NATIVE_PROTOCOL_VERSION),
+            host_version: Some(HOST_BUILD_VERSION.into()),
+            extension_version: Some(HOST_BUILD_VERSION.into()),
             probe_action: Some("transactions".into()),
             first_page_results: Some(3),
             category_count: None,
@@ -874,12 +951,58 @@ mod tests {
     }
 
     #[test]
+    fn rejects_stale_doctor_identity_and_scope() {
+        let config = BridgeConfig {
+            version: 2,
+            group_path_segment: "AbC123+example-company".into(),
+            pool_handle: "AbC123".into(),
+            payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
+            capabilities: vec!["transactions.read".into()],
+            receipt_roots: vec![],
+            max_file_bytes: 1024,
+            hmac_secret: "a".repeat(64),
+        };
+        let mut doctor = DoctorResult {
+            connected: true,
+            group_path_segment: config.group_path_segment.clone(),
+            pool_handle: config.pool_handle.clone(),
+            payment_account_uuid: config.payment_account_uuid.clone(),
+            capabilities: config.capabilities.clone(),
+            protocol_version: Some(NATIVE_PROTOCOL_VERSION),
+            host_version: Some(HOST_BUILD_VERSION.into()),
+            extension_version: Some(HOST_BUILD_VERSION.into()),
+            probe_action: Some("transactions".into()),
+            first_page_results: Some(3),
+            category_count: None,
+            recent_activity_count: None,
+        };
+
+        assert!(validate_doctor(&config, &doctor).is_ok());
+        doctor.protocol_version = Some(NATIVE_PROTOCOL_VERSION + 1);
+        assert!(
+            validate_doctor(&config, &doctor)
+                .unwrap_err()
+                .to_string()
+                .contains("protocol")
+        );
+        doctor.protocol_version = Some(NATIVE_PROTOCOL_VERSION);
+        doctor.capabilities.push("audit.read".into());
+        assert!(
+            validate_doctor(&config, &doctor)
+                .unwrap_err()
+                .to_string()
+                .contains("account scope")
+        );
+    }
+
+    #[test]
     fn renders_install_paths_and_next_steps() {
         let result = InstallResult {
             config_path: "/support/config.json".into(),
             extension_id: "extension-id",
             extension_path: "/support/extension".into(),
             native_host_manifest: "/chrome/native-host.json".into(),
+            host_restart: HostRestartStatus::Requested,
         };
         let output = format_install(&result);
 
@@ -895,6 +1018,7 @@ mod tests {
                 "extensionId": "extension-id",
                 "extensionPath": "/support/extension",
                 "nativeHostManifest": "/chrome/native-host.json",
+                "hostRestart": "requested",
             })
         );
     }

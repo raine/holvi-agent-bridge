@@ -72,7 +72,10 @@ impl HostProcess {
             _directory: directory,
         };
 
-        assert_eq!(host.read_native()["type"], "host_ready");
+        let ready = host.read_native();
+        assert_eq!(ready["type"], "host_ready");
+        assert_eq!(ready["protocolVersion"], 1);
+        assert_eq!(ready["hostVersion"], env!("CARGO_PKG_VERSION"));
         host.send_native(&json!({"type": "tab_ready", "tabId": 7}));
         wait_for_path(&host.socket_path);
         assert_eq!(
@@ -232,6 +235,43 @@ fn native_bridge_routes_signed_requests_across_real_transports() {
         read_socket_response(&mut interrupted_socket),
         json!({"ok": false, "error": CLOSED_ERROR})
     );
+    host.wait_for_exit();
+    assert!(!host.socket_path.exists());
+}
+
+#[test]
+fn extension_protocol_rejection_reaches_local_clients() {
+    let mut host = HostProcess::spawn();
+    host.send_native(&json!({
+        "type": "host_rejected",
+        "error": "Native host protocol 2 is incompatible with extension protocol 1.",
+    }));
+    thread::sleep(Duration::from_millis(20));
+    let request = sign_request(SECRET, Action::Doctor(EmptyParams {})).unwrap();
+
+    assert_eq!(
+        read_socket_response(&mut host.request(&request)),
+        json!({
+            "ok": false,
+            "error": "Native host protocol 2 is incompatible with extension protocol 1."
+        })
+    );
+    host.close_input();
+    host.wait_for_exit();
+}
+
+#[test]
+fn signed_restart_finishes_the_socket_response_and_native_host() {
+    let mut host = HostProcess::spawn();
+    let restart = sign_request(SECRET, Action::HostRestart(EmptyParams {})).unwrap();
+    let mut socket = host.request(&restart);
+
+    assert_eq!(
+        read_socket_response(&mut socket),
+        json!({"ok": true, "data": {"restarting": true}})
+    );
+    assert_eq!(host.read_native(), json!({"type": "host_restart"}));
+    host.close_input();
     host.wait_for_exit();
     assert!(!host.socket_path.exists());
 }

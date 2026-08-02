@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -43,6 +43,7 @@ pub async fn send(
     native: mpsc::Sender<Value>,
 ) -> Result<()> {
     match &request.action {
+        Action::HostRestart(_) => bail!("Host restart must be handled by the runtime."),
         Action::Upload(params) => receipt::transfer(&request.id, params, &config, &native).await,
         action => native
             .send(json!({
