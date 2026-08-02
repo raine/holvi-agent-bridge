@@ -268,12 +268,17 @@
   function projectTransactionListing(value) {
     return projection(value);
   }
-  function debtRecord(value, debtUuid, label) {
+  function debtRecord(value, debtUuid, paymentAccountUuid, label) {
     const debt = record(value, label);
     const requestedUuid = uuid(debtUuid, "Debt UUID");
     const responseUuid = uuid(debt.uuid, `${label} UUID`);
     if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
       throw new Error(`Holvi ${label.toLowerCase()} UUID does not match the request.`);
+    }
+    const configuredPaymentAccountUuid = uuid(paymentAccountUuid, "Configured payment account");
+    const responsePaymentAccountUuid = uuid(debt.payment_account_uuid, `${label} payment account`);
+    if (responsePaymentAccountUuid.toLowerCase() !== configuredPaymentAccountUuid.toLowerCase()) {
+      throw new Error(`Holvi ${label.toLowerCase()} payment account does not match the configured payment account.`);
     }
     const attachments = boundedArray(debt.attachments, `${label} attachments`, maxDebtAttachments, true);
     const merchant = optionalRecord(debt.merchant, `${label} merchant`);
@@ -287,11 +292,11 @@
       bookkeepingStatus: optionalString(debt.bookkeeping_status, `${label} bookkeeping status`) ?? stringOrEmpty(debt.bookkeeping_state, `${label} bookkeeping state`)
     });
   }
-  function projectDebtPreview(value, debtUuid) {
-    return debtRecord(value, debtUuid, "Debt");
+  function projectDebtPreview(value, debtUuid, paymentAccountUuid) {
+    return debtRecord(value, debtUuid, paymentAccountUuid, "Debt");
   }
-  function projectUploadDebtRead(value, debtUuid) {
-    return debtRecord(value, debtUuid, "Upload debt");
+  function projectUploadDebtRead(value, debtUuid, paymentAccountUuid) {
+    return debtRecord(value, debtUuid, paymentAccountUuid, "Upload debt");
   }
   function bookkeepingItem(value) {
     const item = record(value, "Bookkeeping item");
@@ -629,7 +634,7 @@
     }
     async previewDebt(auth, debtUuid) {
       const validUuid = validateUuid(debtUuid, "debt");
-      return projectDebtPreview(await this.request(auth, this.debtPath(validUuid)), validUuid);
+      return projectDebtPreview(await this.request(auth, this.debtPath(validUuid)), validUuid, this.session.config.paymentAccountUuid);
     }
     async bookkeepingDebt(auth, debtUuid) {
       const validUuid = validateUuid(debtUuid, "debt");
@@ -1097,7 +1102,7 @@
     async uploadReceipt(auth, upload) {
       this.session.requireCapabilities("transactions.read", "attachments.write");
       const debtUuid = validateUuid(upload.debtUuid, "debt");
-      const before = projectUploadDebtRead(await this.api.request(auth, this.api.debtPath(debtUuid)), debtUuid);
+      const before = projectUploadDebtRead(await this.api.request(auth, this.api.debtPath(debtUuid)), debtUuid, this.session.config.paymentAccountUuid);
       const beforeCount = before.attachmentCount;
       if (beforeCount !== 0) {
         throw new Error(`Upload refused because the transaction has ${beforeCount} attachment(s).`);
@@ -1119,7 +1124,7 @@
         if (delay) {
           await this.sleep(delay);
         }
-        const after = projectUploadDebtRead(await this.api.request(auth, this.api.debtPath(debtUuid)), debtUuid);
+        const after = projectUploadDebtRead(await this.api.request(auth, this.api.debtPath(debtUuid)), debtUuid, this.session.config.paymentAccountUuid);
         afterCount = after.attachmentCount;
         if (afterCount > 0) {
           break;

@@ -27,6 +27,7 @@ const auth: Auth = {
   token: "header.payload.signature",
   csrfToken: "csrf-token",
 };
+const debtUuid = "11111111-1111-4111-8111-111111111111";
 
 function payment(uuid: string, timestamp: string) {
   return {
@@ -105,6 +106,22 @@ describe("Holvi API boundary", () => {
     const api = new HolviApi(staticConfig, session, fetchRequest);
 
     await api.request(auth, `${session.apiRoot()}category/`);
+  });
+
+  test("rejects transaction preview from another payment account", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const fetchRequest = async () =>
+      jsonResponse({
+        uuid: debtUuid,
+        payment_account_uuid: "99999999-9999-4999-8999-999999999999",
+        attachments: [],
+      });
+    const api = new HolviApi(staticConfig, session, fetchRequest);
+
+    await expect(api.previewDebt(auth, debtUuid)).rejects.toThrow(
+      "payment account does not match the configured payment account",
+    );
   });
 
   test("paginates with scoped account parameters and filters dates", async () => {

@@ -18,6 +18,7 @@ import {
 
 const debtUuid = "11111111-1111-4111-8111-111111111111";
 const itemUuid = "22222222-2222-4222-8222-222222222222";
+const paymentAccountUuid = "33333333-3333-4333-8333-333333333333";
 
 function debt() {
   return {
@@ -31,7 +32,7 @@ function debt() {
     export_status: "pending",
     type: "purchase",
     subtype: "card_purchase",
-    payment_account_uuid: "33333333-3333-4333-8333-333333333333",
+    payment_account_uuid: paymentAccountUuid,
     connection_uuid: null,
     attachments: [{}],
     items: [
@@ -200,7 +201,7 @@ describe("transaction projections", () => {
 describe("debt read projections", () => {
   test("preserves preview fields and validates upload reads", () => {
     const value = debt();
-    expect(projectDebtPreview(value, debtUuid)).toEqual({
+    expect(projectDebtPreview(value, debtUuid, paymentAccountUuid)).toEqual({
       debtUuid,
       code: "DEBT-1",
       counterparty: "Example merchant",
@@ -209,7 +210,9 @@ describe("debt read projections", () => {
       attachmentCount: 1,
       bookkeepingStatus: "complete",
     });
-    expect(projectUploadDebtRead(value, debtUuid)).toMatchObject({
+    expect(
+      projectUploadDebtRead(value, debtUuid, paymentAccountUuid),
+    ).toMatchObject({
       debtUuid,
       code: "DEBT-1",
       attachmentCount: 1,
@@ -218,16 +221,48 @@ describe("debt read projections", () => {
 
   test("rejects malformed shapes and debt identity mismatches", () => {
     expect(() =>
-      projectDebtPreview({ ...debt(), attachments: "one" }, debtUuid),
+      projectDebtPreview(
+        { ...debt(), attachments: "one" },
+        debtUuid,
+        paymentAccountUuid,
+      ),
     ).toThrow("unexpected shape");
 
     const otherUuid = "99999999-9999-4999-8999-999999999999";
     expect(() =>
-      projectDebtPreview({ ...debt(), uuid: otherUuid }, debtUuid),
+      projectDebtPreview(
+        { ...debt(), uuid: otherUuid },
+        debtUuid,
+        paymentAccountUuid,
+      ),
     ).toThrow("does not match the request");
     expect(() =>
-      projectUploadDebtRead({ ...debt(), uuid: otherUuid }, debtUuid),
+      projectUploadDebtRead(
+        { ...debt(), uuid: otherUuid },
+        debtUuid,
+        paymentAccountUuid,
+      ),
     ).toThrow("does not match the request");
+  });
+
+  test("requires a valid matching payment account", () => {
+    const otherPaymentAccountUuid = "99999999-9999-4999-8999-999999999999";
+    for (const value of [undefined, "invalid", otherPaymentAccountUuid]) {
+      expect(() =>
+        projectDebtPreview(
+          { ...debt(), payment_account_uuid: value },
+          debtUuid,
+          paymentAccountUuid,
+        ),
+      ).toThrow(/payment account/i);
+      expect(() =>
+        projectUploadDebtRead(
+          { ...debt(), payment_account_uuid: value },
+          debtUuid,
+          paymentAccountUuid,
+        ),
+      ).toThrow(/payment account/i);
+    }
   });
 });
 

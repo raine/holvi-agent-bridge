@@ -24,6 +24,7 @@ export class UploadWorkflow {
     const before = projectUploadDebtRead(
       await this.api.request(auth, this.api.debtPath(debtUuid)),
       debtUuid,
+      this.session.config.paymentAccountUuid,
     );
     const beforeCount = before.attachmentCount as number;
     if (beforeCount !== 0) {
@@ -64,6 +65,7 @@ export class UploadWorkflow {
       const after = projectUploadDebtRead(
         await this.api.request(auth, this.api.debtPath(debtUuid)),
         debtUuid,
+        this.session.config.paymentAccountUuid,
       );
       afterCount = after.attachmentCount as number;
       if (afterCount > 0) {

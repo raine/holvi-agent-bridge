@@ -243,6 +243,7 @@ export function projectTransactionListing<T>(value: T): T {
 function debtRecord(
   value: unknown,
   debtUuid: string,
+  paymentAccountUuid: string,
   label: string,
 ): JsonRecord {
   const debt = record(value, label);
@@ -251,6 +252,22 @@ function debtRecord(
   if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
     throw new Error(
       `Holvi ${label.toLowerCase()} UUID does not match the request.`,
+    );
+  }
+  const configuredPaymentAccountUuid = uuid(
+    paymentAccountUuid,
+    "Configured payment account",
+  );
+  const responsePaymentAccountUuid = uuid(
+    debt.payment_account_uuid,
+    `${label} payment account`,
+  );
+  if (
+    responsePaymentAccountUuid.toLowerCase() !==
+    configuredPaymentAccountUuid.toLowerCase()
+  ) {
+    throw new Error(
+      `Holvi ${label.toLowerCase()} payment account does not match the configured payment account.`,
     );
   }
   const attachments = boundedArray(
@@ -278,15 +295,17 @@ function debtRecord(
 export function projectDebtPreview(
   value: unknown,
   debtUuid: string,
+  paymentAccountUuid: string,
 ): JsonRecord {
-  return debtRecord(value, debtUuid, "Debt");
+  return debtRecord(value, debtUuid, paymentAccountUuid, "Debt");
 }
 
 export function projectUploadDebtRead(
   value: unknown,
   debtUuid: string,
+  paymentAccountUuid: string,
 ): JsonRecord {
-  return debtRecord(value, debtUuid, "Upload debt");
+  return debtRecord(value, debtUuid, paymentAccountUuid, "Upload debt");
 }
 
 function bookkeepingItem(value: unknown): JsonRecord {

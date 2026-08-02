@@ -165,6 +165,7 @@ export class HolviApi {
     return projectDebtPreview(
       await this.request(auth, this.debtPath(validUuid)),
       validUuid,
+      this.session.config.paymentAccountUuid,
     );
   }
 
