@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::filesystem::{
-    current_user_uid, has_private_permissions, is_owned_by_current_user, is_regular_file,
+    current_user_uid, has_mode_0600, is_owned_by_current_user, is_regular_file,
 };
 
 pub const CONFIG_VERSION: u8 = 2;
@@ -141,7 +141,7 @@ pub fn load_config() -> Result<(BridgeConfig, PathBuf)> {
     let metadata = fs::symlink_metadata(&path)
         .with_context(|| format!("Unable to read config metadata: {}", path.display()))?;
     ensure!(
-        is_regular_file(&metadata) && has_private_permissions(&metadata),
+        is_regular_file(&metadata) && has_mode_0600(&metadata),
         "Config must be a regular file with 0600 permissions: {}",
         path.display()
     );

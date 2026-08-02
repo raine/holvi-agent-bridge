@@ -15,7 +15,7 @@ use crate::config::{
     HOST_NAME, SUPPORTED_CAPABILITIES, default_config_path, is_lower_hex, parse_group_url,
     validate_uuid,
 };
-use crate::filesystem::{has_private_permissions, is_owned_by_current_user, is_regular_file};
+use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_regular_file};
 use crate::receipt_sandbox::resolve_receipt_root;
 
 const EXTENSION_FILES: [(&str, &[u8]); 4] = [
@@ -176,7 +176,7 @@ fn chrome_manifest_directory() -> Result<PathBuf> {
 fn reusable_secret(path: &Path) -> Option<String> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if !is_regular_file(&metadata)
-        || !has_private_permissions(&metadata)
+        || !has_mode_0600(&metadata)
         || !is_owned_by_current_user(&metadata)
     {
         return None;
@@ -500,6 +500,24 @@ mod tests {
             serde_json::from_slice(&fs::read(result.native_host_manifest).unwrap()).unwrap();
         assert_eq!(manifest["path"], executable.to_string_lossy().as_ref());
         assert_eq!(manifest["allowed_origins"], json!([EXTENSION_ORIGIN]));
+    }
+
+    #[test]
+    fn reuses_secrets_only_from_mode_0600_config_files() {
+        let temporary = tempdir().unwrap();
+        let config_path = temporary.path().join("config.json");
+        let secret = "a".repeat(64);
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({"hmacSecret": secret})).unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o400)).unwrap();
+
+        assert_eq!(reusable_secret(&config_path), None);
+
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(reusable_secret(&config_path), Some(secret));
     }
 
     #[test]

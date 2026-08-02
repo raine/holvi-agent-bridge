@@ -548,7 +548,7 @@ On Linux, equivalent files live under the XDG config directory and Google Chrome
 native messaging directory.
 
 Config format version 2 remains compatible with existing installations. Running
-`holvi install` reuses a valid private HMAC secret and updates account scope,
+`holvi install` reuses a valid `0600` HMAC secret and updates account scope,
 capabilities, receipt roots, the embedded extension, and the native host
 manifest.
 
