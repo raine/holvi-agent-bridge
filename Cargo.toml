@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Raine Virta"]
+license = "MIT"
 description = "Capability-scoped local agent bridge for Holvi"
-include = ["/src/**/*.rs", "/src/skill.md", "/assets/extension/*", "/bridge-contract.json", "/Cargo.toml", "/Cargo.lock", "/README.md"]
+include = ["/src/**/*.rs", "/src/skill.md", "/assets/extension/*", "/bridge-contract.json", "/Cargo.toml", "/Cargo.lock", "/LICENSE", "/README.md"]
 
 [[bin]]
 name = "holvi"
