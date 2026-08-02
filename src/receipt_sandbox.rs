@@ -1,16 +1,65 @@
-use std::fs;
+use std::fs::{self, File, Metadata};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReceiptFile {
     pub path: PathBuf,
     pub file_name: String,
     pub mime_type: &'static str,
     pub size: u64,
+    #[serde(skip)]
+    pub file: File,
+    #[serde(skip)]
+    identity: FileIdentity,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+    size: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+impl FileIdentity {
+    fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            size: metadata.len(),
+            modified_seconds: metadata.mtime(),
+            modified_nanoseconds: metadata.mtime_nsec(),
+            changed_seconds: metadata.ctime(),
+            changed_nanoseconds: metadata.ctime_nsec(),
+        }
+    }
+}
+
+impl ReceiptFile {
+    pub fn ensure_unchanged(&self) -> Result<()> {
+        let path_identity = FileIdentity::from_metadata(
+            &fs::metadata(&self.path).context("Receipt path changed while reading the file.")?,
+        );
+        ensure!(
+            path_identity.device == self.identity.device
+                && path_identity.inode == self.identity.inode,
+            "Receipt path changed while reading the file."
+        );
+        let open_identity = FileIdentity::from_metadata(&self.file.metadata()?);
+        ensure!(
+            open_identity == self.identity,
+            "Receipt changed while reading the file."
+        );
+        Ok(())
+    }
 }
 
 pub fn resolve_receipt_root(root: &Path) -> Result<PathBuf> {
@@ -44,17 +93,27 @@ pub fn resolve_receipt_file(
         roots.iter().any(|root| candidate.starts_with(root)),
         "Receipt path is outside the approved receipt folders."
     );
-    let metadata = fs::metadata(&candidate)?;
+    let path_metadata = fs::metadata(&candidate)?;
+    ensure!(
+        path_metadata.is_file(),
+        "Receipt path must identify a regular file."
+    );
+    ensure!(
+        (1..=max_file_bytes).contains(&path_metadata.len()),
+        "Receipt size must be between 1 and {} bytes.",
+        max_file_bytes
+    );
+    let file = File::open(&candidate).context("Receipt file must be readable.")?;
+    let metadata = file.metadata()?;
     ensure!(
         metadata.is_file(),
         "Receipt path must identify a regular file."
     );
+    let identity = FileIdentity::from_metadata(&metadata);
     ensure!(
-        (1..=max_file_bytes).contains(&metadata.len()),
-        "Receipt size must be between 1 and {} bytes.",
-        max_file_bytes
+        identity == FileIdentity::from_metadata(&path_metadata),
+        "Receipt changed while opening the file."
     );
-    fs::File::open(&candidate).context("Receipt file must be readable.")?;
     let extension = candidate
         .extension()
         .and_then(|value| value.to_str())
@@ -77,11 +136,14 @@ pub fn resolve_receipt_file(
         file_name,
         mime_type,
         size: metadata.len(),
+        file,
+        identity,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
     use std::os::unix::fs::symlink;
 
     use tempfile::tempdir;
@@ -117,6 +179,51 @@ mod tests {
         let error = resolve_receipt_file(&[approved], 1024 * 1024, &escaped).unwrap_err();
 
         assert!(error.to_string().contains("outside the approved"));
+    }
+
+    #[test]
+    fn keeps_the_approved_file_open_when_its_path_is_replaced() {
+        let temporary = tempdir().unwrap();
+        let approved = temporary.path().join("approved");
+        fs::create_dir(&approved).unwrap();
+        let receipt = approved.join("receipt.pdf");
+        let displaced = approved.join("displaced.pdf");
+        fs::write(&receipt, b"approved contents").unwrap();
+        let mut resolved = resolve_receipt_file(&[approved], 1024 * 1024, &receipt).unwrap();
+
+        fs::rename(&receipt, &displaced).unwrap();
+        fs::write(&receipt, b"replacement contents").unwrap();
+        let mut contents = Vec::new();
+        resolved.file.read_to_end(&mut contents).unwrap();
+
+        assert_eq!(contents, b"approved contents");
+        assert!(
+            resolved
+                .ensure_unchanged()
+                .unwrap_err()
+                .to_string()
+                .contains("path changed")
+        );
+    }
+
+    #[test]
+    fn detects_mutation_of_the_approved_file() {
+        let temporary = tempdir().unwrap();
+        let approved = temporary.path().join("approved");
+        fs::create_dir(&approved).unwrap();
+        let receipt = approved.join("receipt.pdf");
+        fs::write(&receipt, b"approved contents").unwrap();
+        let resolved = resolve_receipt_file(&[approved], 1024 * 1024, &receipt).unwrap();
+
+        fs::write(&receipt, b"changed! contents").unwrap();
+
+        assert!(
+            resolved
+                .ensure_unchanged()
+                .unwrap_err()
+                .to_string()
+                .contains("Receipt changed")
+        );
     }
 
     #[test]
