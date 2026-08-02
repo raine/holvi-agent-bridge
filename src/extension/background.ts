@@ -412,15 +412,17 @@ async function apiRequest(
   return body;
 }
 
-function feedPath(cursor = ""): string {
+function feedPath(cursor = "", missingAttachments = false): string {
   if (!runtimeConfig) {
     throw new Error("The local bridge has no configured Holvi account.");
   }
   const query = new URLSearchParams({
     timeline: "past",
     payment_account: runtimeConfig.paymentAccountUuid,
-    missing_attachments: "true",
   });
+  if (missingAttachments) {
+    query.set("missing_attachments", "true");
+  }
   if (cursor) {
     query.set("cursor", cursor);
   }
@@ -483,17 +485,21 @@ interface FeedPage {
   pagination?: { has_more?: boolean; next_cursor?: string };
 }
 
-async function scanMissing(
+async function listTransactions(
   auth: Auth,
   params: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const results: Record<string, unknown>[] = [];
   const seenCursors = new Set<string>();
+  const missingAttachments = params.missingAttachments === true;
   let cursor = "";
   let pages = 0;
 
   do {
-    const page = (await apiRequest(auth, feedPath(cursor))) as FeedPage;
+    const page = (await apiRequest(
+      auth,
+      feedPath(cursor, missingAttachments),
+    )) as FeedPage;
     if (
       !Array.isArray(page?.results) ||
       typeof page?.pagination?.has_more !== "boolean"
@@ -510,11 +516,11 @@ async function scanMissing(
     }
 
     pages += 1;
-    if (results.length > staticConfig.maxScanResults) {
-      throw new Error("The missing-receipt scan exceeded its result limit.");
+    if (results.length > staticConfig.maxTransactionResults) {
+      throw new Error("The transaction listing exceeded its result limit.");
     }
-    if (pages >= staticConfig.maxScanPages && page.pagination.has_more) {
-      throw new Error("The missing-receipt scan exceeded its page limit.");
+    if (pages >= staticConfig.maxTransactionPages && page.pagination.has_more) {
+      throw new Error("The transaction listing exceeded its page limit.");
     }
     cursor = page.pagination.has_more ? page.pagination.next_cursor || "" : "";
     if (page.pagination.has_more && !cursor) {
@@ -526,7 +532,7 @@ async function scanMissing(
     seenCursors.add(cursor);
   } while (cursor);
 
-  return { pages, count: results.length, results };
+  return { pages, count: results.length, missingAttachments, results };
 }
 
 function validateUuid(value: string, resource: string): string {
@@ -689,8 +695,8 @@ async function handleCommand(message: NativeMessage): Promise<unknown> {
           : 0,
       };
     }
-    case "scan":
-      return scanMissing(auth, message.params || {});
+    case "transactions":
+      return listTransactions(auth, message.params || {});
     case "preview":
       return previewDebt(auth, asString(message.params?.debtUuid));
     default:

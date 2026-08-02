@@ -2,7 +2,7 @@ import type { Capability } from "./config.js";
 
 export const ACTION_CAPABILITIES = {
   doctor: ["transactions.read"],
-  scan: ["transactions.read"],
+  transactions: ["transactions.read"],
   preview: ["transactions.read"],
   upload: ["transactions.read", "attachments.write"],
 } as const satisfies Record<string, readonly Capability[]>;

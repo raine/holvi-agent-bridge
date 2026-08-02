@@ -22,7 +22,7 @@ test("native message decoder accepts fragmented frames", () => {
 });
 
 test("signed local requests authenticate once", () => {
-  const request = signRequest(secret, "scan", { from: "2026-07-01" });
+  const request = signRequest(secret, "transactions", { from: "2026-07-01" });
   const seen = new Map<string, number>();
 
   assert.deepEqual(verifyRequest(secret, request, seen), {
@@ -30,7 +30,7 @@ test("signed local requests authenticate once", () => {
     id: request.id,
     issuedAt: request.issuedAt,
     nonce: request.nonce,
-    action: "scan",
+    action: "transactions",
     params: { from: "2026-07-01" },
   });
   assert.throws(

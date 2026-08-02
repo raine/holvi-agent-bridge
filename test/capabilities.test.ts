@@ -12,7 +12,7 @@ test("unknown actions have no capability mapping", () => {
 test("read-only scope disables attachment writes", () => {
   assert.deepEqual(enabledActions(["transactions.read"]), {
     doctor: true,
-    scan: true,
+    transactions: true,
     preview: true,
     upload: false,
   });

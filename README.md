@@ -17,7 +17,7 @@ An installation explicitly enables capabilities in its private config.
 
 | Capability          | Operations                                                           |
 | ------------------- | -------------------------------------------------------------------- |
-| `transactions.read` | Check the connection, scan transactions, and inspect one transaction |
+| `transactions.read` | Check the connection, list transactions, and inspect one transaction |
 | `attachments.write` | Attach a local file after preflight checks and verify the result     |
 
 `attachments.write` operations also require `transactions.read` because the
@@ -102,12 +102,19 @@ Verify the complete path from the CLI through Chrome to Holvi:
 holvi-agent-bridge doctor
 ```
 
-## Receipt workflow
+## Transaction and receipt workflow
 
-Scan a date range for transactions that have no attachment:
+List all transactions in a date range:
 
 ```sh
-holvi-agent-bridge scan --from 2026-07-01 --to 2026-07-31 --json
+holvi-agent-bridge transactions --from 2026-07-01 --to 2026-07-31 --json
+```
+
+Add `--missing-attachments` to return only transactions that have no attachment:
+
+```sh
+holvi-agent-bridge transactions --from 2026-07-01 --to 2026-07-31 \
+  --missing-attachments --json
 ```
 
 The JSON output keeps Holvi's payment UUID and direct-match debt UUID separate.
@@ -145,12 +152,12 @@ exactly one.
 
 The intended agent sequence is:
 
-1. `scan --json`
+1. `transactions --missing-attachments --json`
 2. match a local receipt using transaction date, merchant, amount, and currency
 3. `preview`
 4. `upload` as a dry run
 5. `upload --yes`
-6. `scan --json` again for reconciliation
+6. `transactions --missing-attachments --json` again for reconciliation
 
 ## Security model
 

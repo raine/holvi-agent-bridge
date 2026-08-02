@@ -21,7 +21,7 @@ interface ParsedArguments {
   options: Options;
 }
 
-interface ScanRow {
+interface TransactionRow {
   date?: string;
   counterparty?: string;
   description?: string;
@@ -31,10 +31,11 @@ interface ScanRow {
   debtUuid?: string | null;
 }
 
-interface ScanResult {
+interface TransactionResult {
   count: number;
   pages: number;
-  results: ScanRow[];
+  missingAttachments: boolean;
+  results: TransactionRow[];
 }
 
 const helpText = `Holvi Agent Bridge
@@ -45,7 +46,8 @@ Usage:
     [--receipt-root /absolute/path] --yes
   holvi-agent-bridge capabilities
   holvi-agent-bridge doctor
-  holvi-agent-bridge scan [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--json]
+  holvi-agent-bridge transactions [--from YYYY-MM-DD] [--to YYYY-MM-DD] \
+    [--missing-attachments] [--json]
   holvi-agent-bridge preview --debt UUID
   holvi-agent-bridge upload --debt UUID --file /absolute/path/to/receipt.pdf
   holvi-agent-bridge upload --debt UUID --file /absolute/path/to/receipt.pdf --yes
@@ -71,7 +73,7 @@ function parseArguments(argv: string[]): ParsedArguments {
       throw new Error(`Unexpected argument: ${argument}`);
     }
     const name = argument.slice(2);
-    if (name === "yes" || name === "json") {
+    if (name === "yes" || name === "json" || name === "missing-attachments") {
       options[name] = true;
       continue;
     }
@@ -229,8 +231,8 @@ function formatCell(value: unknown, width: number): string {
     : valueText.padEnd(width);
 }
 
-function printScan(scan: ScanResult): void {
-  const rows = scan.results || [];
+function printTransactions(transactions: TransactionResult): void {
+  const rows = transactions.results || [];
   const widths = {
     date: 10,
     counterparty: 28,
@@ -257,8 +259,11 @@ function printScan(scan: ScanResult): void {
       ].join("  ")}\n`,
     );
   }
+  const label = transactions.missingAttachments
+    ? "missing attachment transaction(s)"
+    : "transaction(s)";
   process.stdout.write(
-    `\n${scan.count} missing receipt transaction(s), ${scan.pages} API page(s).\n`,
+    `\n${transactions.count} ${label}, ${transactions.pages} API page(s).\n`,
   );
 }
 
@@ -312,21 +317,26 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command === "scan") {
-    assertOptions(options, ["from", "to", "json"]);
+  if (command === "transactions") {
+    assertOptions(options, ["from", "to", "missing-attachments", "json"]);
     const from = validateDate(stringOption(options, "from"), "from");
     const to = validateDate(stringOption(options, "to"), "to");
     if (from && to && from > to) {
       throw new Error("--from must be on or before --to.");
     }
-    const result = await requestHost<ScanResult>(config.hmacSecret, "scan", {
-      from,
-      to,
-    });
+    const result = await requestHost<TransactionResult>(
+      config.hmacSecret,
+      "transactions",
+      {
+        from,
+        to,
+        missingAttachments: options["missing-attachments"] === true,
+      },
+    );
     if (options.json) {
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     } else {
-      printScan(result);
+      printTransactions(result);
     }
     return;
   }

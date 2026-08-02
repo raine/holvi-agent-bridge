@@ -33,6 +33,29 @@ test("install parsing preserves repeated receipt roots", () => {
   );
 });
 
+test("transactions parsing accepts the missing attachments filter", () => {
+  assert.deepEqual(
+    internal.parseArguments([
+      "transactions",
+      "--from",
+      "2026-07-01",
+      "--to",
+      "2026-07-31",
+      "--missing-attachments",
+      "--json",
+    ]),
+    {
+      command: "transactions",
+      options: {
+        from: "2026-07-01",
+        to: "2026-07-31",
+        "missing-attachments": true,
+        json: true,
+      },
+    },
+  );
+});
+
 test("date validation rejects normalized overflow dates", () => {
   assert.equal(internal.validateDate("2026-02-28", "from"), "2026-02-28");
   assert.throws(

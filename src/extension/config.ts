@@ -4,8 +4,8 @@ interface HolviBridgeStaticConfig {
   groupPathPrefix: string;
   nativeHostName: string;
   maxFileBytes: number;
-  maxScanPages: number;
-  maxScanResults: number;
+  maxTransactionPages: number;
+  maxTransactionResults: number;
 }
 
 var _HOLVI_AGENT_BRIDGE_STATIC_CONFIG: HolviBridgeStaticConfig;
@@ -16,6 +16,6 @@ _HOLVI_AGENT_BRIDGE_STATIC_CONFIG = Object.freeze({
   groupPathPrefix: "/group/",
   nativeHostName: "app.holvi_agent_bridge",
   maxFileBytes: 25 * 1024 * 1024,
-  maxScanPages: 200,
-  maxScanResults: 10_000,
+  maxTransactionPages: 200,
+  maxTransactionResults: 10_000,
 });
