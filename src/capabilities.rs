@@ -2,10 +2,12 @@ use serde::ser::{Serialize, SerializeMap, Serializer};
 
 use crate::protocol::Action;
 
-pub const ACTION_CAPABILITIES: [(&str, &[&str]); 10] = [
+pub const ACTION_CAPABILITIES: [(&str, &[&str]); 12] = [
     ("doctor", &[]),
     ("transactions", &["transactions.read"]),
     ("preview", &["transactions.read"]),
+    ("comments.list", &["transactions.read"]),
+    ("comments.create", &["transactions.read", "comments.write"]),
     ("upload", &["transactions.read", "attachments.write"]),
     (
         "attachments.delete",
@@ -21,7 +23,10 @@ pub const ACTION_CAPABILITIES: [(&str, &[&str]); 10] = [
 pub fn required_capabilities(action: &Action) -> &'static [&'static str] {
     match action {
         Action::HostRestart(_) | Action::Doctor(_) => &[],
-        Action::Transactions(_) | Action::Preview(_) => &["transactions.read"],
+        Action::Transactions(_) | Action::Preview(_) | Action::CommentsList(_) => {
+            &["transactions.read"]
+        }
+        Action::CommentsCreate(_) => &["transactions.read", "comments.write"],
         Action::Upload(_) => &["transactions.read", "attachments.write"],
         Action::AttachmentDelete(_) => &["transactions.read", "attachments.delete"],
         Action::BookkeepingGet(_)
@@ -80,8 +85,8 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::protocol::{
-        AttachmentDeleteParams, AuditListParams, BookkeepingDescriptionParams, DebtParams,
-        EmptyParams, TransactionParams, UploadParams,
+        AttachmentDeleteParams, AuditListParams, BookkeepingDescriptionParams, CommentCreateParams,
+        DebtParams, EmptyParams, TransactionParams, UploadParams,
     };
 
     use super::*;
@@ -125,6 +130,14 @@ mod tests {
             }),
             Action::Preview(DebtParams {
                 debt_uuid: String::new(),
+            }),
+            Action::CommentsList(DebtParams {
+                debt_uuid: String::new(),
+            }),
+            Action::CommentsCreate(CommentCreateParams {
+                debt_uuid: String::new(),
+                content: String::new(),
+                confirmed: true,
             }),
             Action::Upload(UploadParams {
                 debt_uuid: String::new(),
@@ -212,10 +225,8 @@ mod tests {
     #[test]
     fn serialization_preserves_existing_operation_order() {
         let value = serde_json::to_string(&enabled_actions(&[])).unwrap();
-        assert!(
-            value.starts_with(
-                r#"{"doctor":true,"transactions":false,"preview":false,"upload":false,"#
-            )
-        );
+        assert!(value.starts_with(
+            r#"{"doctor":true,"transactions":false,"preview":false,"comments.list":false,"#
+        ));
     }
 }

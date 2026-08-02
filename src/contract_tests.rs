@@ -10,7 +10,7 @@ use crate::host::{FILE_CHUNK_BYTES, REQUEST_TIMEOUT};
 use crate::protocol::{
     AUDIT_LIMIT_MAX, AUDIT_LIMIT_MIN, BOOKKEEPING_DESCRIPTION_MAX_BYTES,
     EXTENSION_TO_HOST_MESSAGES, HOST_BUILD_VERSION, HOST_TO_EXTENSION_MESSAGES,
-    NATIVE_PROTOCOL_VERSION, REQUEST_MAX_AGE_MS, SIGNED_REQUEST_VERSION,
+    MAX_COMMENT_CONTENT_BYTES, NATIVE_PROTOCOL_VERSION, REQUEST_MAX_AGE_MS, SIGNED_REQUEST_VERSION,
 };
 use crate::receipt_sandbox::{MIN_RECEIPT_BYTES, UPLOAD_MIME_TYPES};
 
@@ -64,6 +64,10 @@ fn native_constants_match_the_bridge_contract() {
     assert_eq!(
         BOOKKEEPING_DESCRIPTION_MAX_BYTES as u64,
         contract["bookkeepingDescriptionBytes"]["max"]
+    );
+    assert_eq!(
+        MAX_COMMENT_CONTENT_BYTES as u64,
+        contract["commentLimits"]["contentBytes"]
     );
 
     assert_eq!(

@@ -18,10 +18,11 @@ pub const HOST_NAME: &str = "app.holvi_agent_bridge";
 pub const ACCOUNT_ORIGIN: &str = "https://account.app.holvi.com";
 pub const MIN_FILE_BYTES: u64 = 1;
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
-pub const SUPPORTED_CAPABILITIES: [&str; 6] = [
+pub const SUPPORTED_CAPABILITIES: [&str; 7] = [
     "transactions.read",
     "attachments.write",
     "attachments.delete",
+    "comments.write",
     "bookkeeping.read",
     "bookkeeping.write",
     "audit.read",
@@ -249,6 +250,7 @@ mod tests {
         let mut config = config(vec![]);
         config.capabilities = vec![
             "attachments.delete".into(),
+            "comments.write".into(),
             "bookkeeping.read".into(),
             "bookkeeping.write".into(),
             "audit.read".into(),

@@ -2,6 +2,8 @@ import {
   projectAuditPage,
   projectBookkeepingDebt,
   projectCategories,
+  projectCommentListing,
+  projectCommentPage,
   projectDebtPreview,
   projectSuggestions,
   projectTransactionFeedPage,
@@ -14,18 +16,25 @@ export const auditLimitMin = 1;
 export const auditLimitMax = 25;
 export const auditPageSize = 25;
 export const maxApiResponseBytes = 2 * 1024 * 1024;
+export const commentPageSize = 25;
+export const maxCommentPages = 40;
+export const maxCommentResults = 1000;
+export const maxCommentResponseBytes = 1024 * 1024;
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-async function boundedResponseText(response: Response): Promise<string> {
+async function boundedResponseText(
+  response: Response,
+  maxResponseBytes: number,
+): Promise<string> {
   const contentLength = response.headers.get("content-length");
   if (contentLength && /^\d+$/.test(contentLength)) {
     const declaredLength = Number(contentLength);
     if (
       !Number.isSafeInteger(declaredLength) ||
-      declaredLength > maxApiResponseBytes
+      declaredLength > maxResponseBytes
     ) {
       throw new Error("Holvi API response exceeded its size limit.");
     }
@@ -43,7 +52,7 @@ async function boundedResponseText(response: Response): Promise<string> {
       break;
     }
     length += value.byteLength;
-    if (length > maxApiResponseBytes) {
+    if (length > maxResponseBytes) {
       await reader.cancel();
       throw new Error("Holvi API response exceeded its size limit.");
     }
@@ -85,6 +94,7 @@ export class HolviApi {
     auth: Auth,
     apiPath: string,
     options: RequestInit = {},
+    maxResponseBytes: number = maxApiResponseBytes,
   ): Promise<unknown> {
     if (!apiPath.startsWith(this.session.apiRoot())) {
       throw new Error(
@@ -112,7 +122,7 @@ export class HolviApi {
     );
 
     const contentType = response.headers.get("content-type") || "";
-    const text = await boundedResponseText(response);
+    const text = await boundedResponseText(response, maxResponseBytes);
     let body: unknown = text;
     if (contentType.includes("application/json")) {
       try {
@@ -151,6 +161,33 @@ export class HolviApi {
     return `${this.session.apiRoot()}debt/${encodeURIComponent(
       validateUuid(debtUuid, "debt"),
     )}/`;
+  }
+
+  commentPath(debtUuid: string): string {
+    return `${this.debtPath(debtUuid)}comment/`;
+  }
+
+  private commentContinuationPath(next: string, debtUuid: string): string {
+    if (next.length > 4096) {
+      throw new Error("Holvi comment pagination URL exceeded its limit.");
+    }
+    let url: URL;
+    try {
+      url = new URL(next, this.staticConfig.apiOrigin);
+    } catch {
+      throw new Error("Holvi comment pagination URL is invalid.");
+    }
+    const expectedPath = this.commentPath(debtUuid);
+    if (
+      url.origin !== this.staticConfig.apiOrigin ||
+      url.pathname !== expectedPath ||
+      url.username ||
+      url.password ||
+      url.hash
+    ) {
+      throw new Error("Holvi comment pagination changed the target endpoint.");
+    }
+    return `${expectedPath}${url.search}`;
   }
 
   async transactionFeedPage(
@@ -217,6 +254,62 @@ export class HolviApi {
       validUuid,
       this.session.config.paymentAccountUuid,
     );
+  }
+
+  async listComments(
+    auth: Auth,
+    debtUuid: string,
+  ): Promise<Record<string, unknown>> {
+    const validUuid = validateUuid(debtUuid, "debt").toLowerCase();
+    await this.previewDebt(auth, validUuid);
+    const results: Record<string, unknown>[] = [];
+    const seenPages = new Set<string>();
+    let path = `${this.commentPath(validUuid)}?${new URLSearchParams({
+      o: "-create_time",
+      page_size: String(commentPageSize),
+    })}`;
+    let pages = 0;
+
+    while (path) {
+      if (seenPages.has(path)) {
+        throw new Error("Holvi repeated a comment pagination URL.");
+      }
+      seenPages.add(path);
+      const page = projectCommentPage(
+        await this.request(auth, path, {}, maxCommentResponseBytes),
+      );
+      results.push(...page.results);
+      pages += 1;
+      if (results.length > maxCommentResults) {
+        throw new Error("The comment listing exceeded its result limit.");
+      }
+      if (page.next && pages >= maxCommentPages) {
+        throw new Error("The comment listing exceeded its page limit.");
+      }
+      path = page.next
+        ? this.commentContinuationPath(page.next, validUuid)
+        : "";
+    }
+
+    for (let index = 1; index < results.length; index += 1) {
+      const previous = results[index - 1];
+      const current = results[index];
+      if (
+        !previous ||
+        !current ||
+        Date.parse(String(previous.createTime)) <
+          Date.parse(String(current.createTime))
+      ) {
+        throw new Error("Holvi comments are not ordered newest first.");
+      }
+    }
+    return projectCommentListing({
+      debtUuid: validUuid,
+      pages,
+      count: results.length,
+      order: "newest-first",
+      results,
+    });
   }
 
   async bookkeepingDebt(

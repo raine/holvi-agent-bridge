@@ -62,8 +62,8 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::protocol::{
-        AttachmentDeleteParams, AuditListParams, BookkeepingDescriptionParams, DebtParams,
-        EmptyParams, UploadParams,
+        AttachmentDeleteParams, AuditListParams, BookkeepingDescriptionParams, CommentCreateParams,
+        DebtParams, EmptyParams, UploadParams,
     };
 
     use super::*;
@@ -141,6 +141,40 @@ mod tests {
                     "transactions.read".into(),
                     "attachments.delete".into()
                 ]),
+                true,
+                false
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn comment_creation_requires_read_and_write_capabilities() {
+        let action = || {
+            Action::CommentsCreate(CommentCreateParams {
+                debt_uuid: "11111111-1111-4111-8111-111111111111".into(),
+                content: "comment".into(),
+                confirmed: true,
+            })
+        };
+        for capabilities in [
+            vec!["transactions.read".into()],
+            vec!["comments.write".into()],
+        ] {
+            assert!(
+                validate(
+                    &test_request(action()),
+                    &test_config(capabilities),
+                    true,
+                    false
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            validate(
+                &test_request(action()),
+                &test_config(vec!["transactions.read".into(), "comments.write".into()]),
                 true,
                 false
             )

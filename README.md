@@ -36,6 +36,7 @@ you enable.
 ## Features
 
 - List and filter transactions for one Holvi payment account.
+- Read and create internal transaction comments without push notifications.
 - View debt and bookkeeping details without exposing full API responses.
 - List bookkeeping categories and suggestions for a debt.
 - Replace one bookkeeping line-item description with dry-run and verification
@@ -119,6 +120,7 @@ holvi install \
   --group-url 'https://account.app.holvi.com/group/AbC123+example-company/' \
   --account '11111111-1111-4111-8111-111111111111' \
   --capability transactions.read \
+  --capability comments.write \
   --capability attachments.write \
   --capability attachments.delete \
   --receipt-root '/absolute/path/to/receipts'
@@ -158,19 +160,20 @@ holvi doctor
 
 The private config lists the capabilities available to the agent.
 
-| Capability           | Operations                                                           |
-| -------------------- | -------------------------------------------------------------------- |
-| `transactions.read`  | Check the connection, list transactions, and inspect one transaction |
-| `attachments.write`  | Attach a local file after preflight checks and verify the result     |
-| `attachments.delete` | Delete one selected debt attachment after preview and verification   |
-| `bookkeeping.read`   | Inspect accounting details, categories, and category suggestions     |
-| `bookkeeping.write`  | Replace one bookkeeping line-item description and verify the result  |
-| `audit.read`         | Inspect up to 25 recent pool activity entries                         |
+| Capability           | Operations                                                                  |
+| -------------------- | --------------------------------------------------------------------------- |
+| `transactions.read`  | Check the connection, list and inspect transactions, and read comments      |
+| `attachments.write`  | Attach a local file after preflight checks and verify the result            |
+| `attachments.delete` | Delete one selected debt attachment after preview and verification          |
+| `comments.write`     | Create an internal comment without sending a push notification              |
+| `bookkeeping.read`   | Inspect accounting details, categories, and category suggestions            |
+| `bookkeeping.write`  | Replace one bookkeeping line-item description and verify the result         |
+| `audit.read`         | Inspect up to 25 recent pool activity entries                                |
 
-Attachment writes and deletions also require `transactions.read` because the
-bridge reads and verifies debt state within the configured payment account
-immediately before and after each write. `attachments.delete` is separate from
-`attachments.write` because deletion is irreversible.
+Attachment writes, attachment deletions, and comment writes also require
+`transactions.read` because the bridge validates the authoritative transaction
+and configured payment account around each operation. `attachments.delete` is
+separate from `attachments.write` because deletion is irreversible.
 
 Inspect the capabilities and operations enabled on a machine:
 
@@ -202,6 +205,31 @@ attachments.
 holvi preview \
   --debt '11111111-1111-4111-8111-111111111111'
 ```
+
+List the internal comments associated with that transaction:
+
+```sh
+holvi transactions comments list \
+  --debt '11111111-1111-4111-8111-111111111111'
+```
+
+Create a comment by checking the dry run, then repeating the exact command with
+`--yes`:
+
+```sh
+holvi transactions comments create \
+  --debt '11111111-1111-4111-8111-111111111111' \
+  --content 'Reconciled against the supplier statement.'
+
+holvi transactions comments create \
+  --debt '11111111-1111-4111-8111-111111111111' \
+  --content 'Reconciled against the supplier statement.' \
+  --yes
+```
+
+Comments are internal notes and do not appear in official bookkeeping reports.
+The bridge always sends `notify_push: false`. A confirmed write performs one
+POST, then verifies the response against an authoritative comment listing.
 
 Before uploading, run the command without `--yes`. It checks the transaction and
 local file without changing Holvi:
@@ -320,6 +348,8 @@ that the command does not use.
 | [`capabilities`](#holvi-capabilities)                       | none                                                       | Show enabled capabilities and operations          |
 | [`doctor`](#holvi-doctor)                                   | any configured capability                                  | Verify the Chrome connection and an API surface   |
 | [`transactions`](#holvi-transactions)                       | `transactions.read`                                        | List payment-account transactions                 |
+| [`transactions comments`](#holvi-transactions-comments)     | `transactions.read`                                        | Read internal transaction comments                |
+| `transactions comments create`                              | `transactions.read`, `comments.write`                      | Dry-run or create one internal comment            |
 | [`preview`](#holvi-preview)                                 | `transactions.read`                                        | Inspect one accounting debt                       |
 | [`upload`](#holvi-upload)                                   | `transactions.read`, plus `attachments.write` with `--yes`  | Validate or upload one receipt                    |
 | [`attachments`](#holvi-attachments)                         | `transactions.read`, `attachments.delete`                   | Inspect or delete debt attachments                |
@@ -478,6 +508,33 @@ holvi transactions \
 `--from` must be on or before `--to`. With no dates, the command lists every
 transaction available within the configured page and result limits. JSON keeps
 `paymentUuid` and the direct-match `debtUuid` separate.
+
+### `holvi transactions comments`
+
+Reads or creates internal comments for a transaction debt.
+
+```sh
+holvi transactions comments list --debt UUID
+holvi transactions comments create --debt UUID --content TEXT [--yes]
+```
+
+Listing requires `transactions.read`. It reads the authoritative debt, verifies
+its payment account, and follows comment pages only while they retain the exact
+configured debt endpoint. Results include bounded comment content, creator,
+creation time, stable UUID when Holvi supplies one, and notification state.
+
+Creation requires `comments.write` together with `transactions.read`. Without
+`--yes`, the CLI reads the debt and prints the target transaction and exact
+proposed content. With `--yes`, it validates the debt account, performs one POST
+with `notify_push` fixed to `false`, and reads the authoritative comment list to
+verify exact content and notification state. Verification uses the comment UUID
+when Holvi supplies it. Otherwise, it requires exactly one match on content,
+creator, creation time, and notification state. A failed or ambiguous write is
+never retried automatically.
+
+Comment content must contain non-whitespace text and fit within 16 KiB of UTF-8.
+Listings use Holvi's 25-record page size and stop at 40 pages, 1,000 results, a
+1 MiB API response, or a 512 KiB projected response.
 
 ### `holvi preview`
 
@@ -668,7 +725,14 @@ sending it to Chrome. The extension checks again before calling Holvi. Unknown
 commands and capabilities are rejected.
 
 Agents call named operations rather than arbitrary HTTP endpoints. API paths and
-methods live in the extension and cannot be supplied by the CLI caller.
+methods live in the extension and cannot be supplied by the CLI caller. Comment
+pagination URLs must retain the configured API origin and exact debt comment
+path before the extension follows them.
+
+Comment text and projected Holvi fields are data only. They cannot select another
+account or debt, grant capabilities, confirm a write, or trigger another action.
+JSON output escapes terminal control characters, and human-facing fields pass
+through terminal sanitization.
 
 The config lists the local directories available for attachments. Files must
 resolve inside one of these directories. The bridge checks that each path is
@@ -742,6 +806,8 @@ The capabilities use these Holvi application endpoints:
 GET    /api/pool/{poolHandle}/ux/payments-feed/
 GET    /api/pool/{poolHandle}/debt/{debtUuid}/
 PATCH  /api/pool/{poolHandle}/debt/{debtUuid}/
+GET    /api/pool/{poolHandle}/debt/{debtUuid}/comment/
+POST   /api/pool/{poolHandle}/debt/{debtUuid}/comment/
 GET    /api/pool/{poolHandle}/debt/{debtUuid}/haip/bookkeeping-suggestions/
 GET    /api/pool/{poolHandle}/category/
 GET    /api/pool/{poolHandle}/log-feed/

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { Auth, StaticBridgeConfig } from "./background-types.js";
-import { HolviApi, maxApiResponseBytes } from "./holvi-api.js";
+import {
+  HolviApi,
+  maxApiResponseBytes,
+  maxCommentResponseBytes,
+} from "./holvi-api.js";
 import { BridgeSession } from "./session.js";
 
 const staticConfig: StaticBridgeConfig = {
@@ -42,6 +46,24 @@ function payment(uuid: string, timestamp: string) {
     fx_meta: null,
     attachment_count: 0,
     matches: [],
+  };
+}
+
+function debt(accountUuid = runtimeConfig.paymentAccountUuid) {
+  return {
+    uuid: debtUuid,
+    payment_account_uuid: accountUuid,
+    attachments: [],
+  };
+}
+
+function comment(uuid: string) {
+  return {
+    uuid,
+    content: "Internal note",
+    creator: { name: "Example User" },
+    create_time: "2026-08-02T12:00:00Z",
+    push_notified: false,
   };
 }
 
@@ -181,6 +203,115 @@ describe("Holvi API boundary", () => {
     );
     expect(urls[0]).toContain("missing_attachments=true");
     expect(urls[1]).toContain("cursor=cursor-2");
+  });
+
+  test("lists bounded comment pages without accepting a changed target", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const urls: string[] = [];
+    const responses = [
+      debt(),
+      {
+        results: [comment("33333333-3333-4333-8333-333333333333")],
+        next: `https://holvi.com/api/pool/example/debt/${debtUuid}/comment/?page=2`,
+      },
+      {
+        results: [comment("44444444-4444-4444-8444-444444444444")],
+        next: null,
+      },
+    ];
+    const api = new HolviApi(staticConfig, session, async (input) => {
+      urls.push(requestUrl(input));
+      return jsonResponse(responses.shift());
+    });
+
+    await expect(api.listComments(auth, debtUuid)).resolves.toMatchObject({
+      debtUuid,
+      pages: 2,
+      count: 2,
+      order: "newest-first",
+    });
+    expect(urls[1]).toContain(
+      `/debt/${debtUuid}/comment/?o=-create_time&page_size=25`,
+    );
+    expect(urls[2]).toContain(`/debt/${debtUuid}/comment/?page=2`);
+
+    const changedTarget = new HolviApi(staticConfig, session, async (input) => {
+      return requestUrl(input).endsWith(`/debt/${debtUuid}/`)
+        ? jsonResponse(debt())
+        : jsonResponse({
+            results: [],
+            next: "https://holvi.com/api/pool/example/category/?page=2",
+          });
+    });
+    await expect(changedTarget.listComments(auth, debtUuid)).rejects.toThrow(
+      "changed the target endpoint",
+    );
+  });
+
+  test("rejects malformed comments, account mismatch, and page overflow", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const malformed = new HolviApi(staticConfig, session, async (input) => {
+      return requestUrl(input).endsWith(`/debt/${debtUuid}/`)
+        ? jsonResponse(debt())
+        : jsonResponse({
+            results: [
+              {
+                ...comment("33333333-3333-4333-8333-333333333333"),
+                creator: { uuid: "not-a-uuid" },
+              },
+            ],
+            next: null,
+          });
+    });
+    await expect(malformed.listComments(auth, debtUuid)).rejects.toThrow(
+      "Comment creator UUID must be a UUID",
+    );
+
+    const methods: string[] = [];
+    const wrongAccount = new HolviApi(
+      staticConfig,
+      session,
+      async (_input, init) => {
+        methods.push(init?.method || "GET");
+        return jsonResponse(debt("99999999-9999-4999-8999-999999999999"));
+      },
+    );
+    await expect(wrongAccount.listComments(auth, debtUuid)).rejects.toThrow(
+      "payment account does not match",
+    );
+    expect(methods).toEqual(["GET"]);
+
+    let requests = 0;
+    const overflowing = new HolviApi(staticConfig, session, async () => {
+      requests += 1;
+      if (requests === 1) return jsonResponse(debt());
+      return jsonResponse({
+        results: [],
+        next: `https://holvi.com/api/pool/example/debt/${debtUuid}/comment/?page=${requests}`,
+      });
+    });
+    await expect(overflowing.listComments(auth, debtUuid)).rejects.toThrow(
+      "exceeded its page limit",
+    );
+    expect(requests).toBe(41);
+  });
+
+  test("bounds API response bytes before projection", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const api = new HolviApi(staticConfig, session, async () =>
+      jsonResponse({ data: "x".repeat(1024 * 1024) }),
+    );
+    await expect(
+      api.request(
+        auth,
+        `${session.apiRoot()}category/`,
+        {},
+        maxCommentResponseBytes,
+      ),
+    ).rejects.toThrow("response exceeded its size limit");
   });
 
   test("rejects repeated pagination cursors", async () => {

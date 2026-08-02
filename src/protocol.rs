@@ -23,6 +23,7 @@ pub const REQUEST_MAX_AGE_MS: u64 = 30_000;
 pub const AUDIT_LIMIT_MIN: u8 = 1;
 pub const AUDIT_LIMIT_MAX: u8 = 25;
 pub const BOOKKEEPING_DESCRIPTION_MAX_BYTES: usize = 4096;
+pub const MAX_COMMENT_CONTENT_BYTES: usize = 16 * 1024;
 pub const HOST_READY_MESSAGE: &str = "host_ready";
 pub const HOST_RESTART_MESSAGE: &str = "host_restart";
 pub const COMMAND_MESSAGE: &str = "command";
@@ -124,6 +125,14 @@ pub struct BookkeepingDescriptionParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CommentCreateParams {
+    pub debt_uuid: String,
+    pub content: String,
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UploadParams {
     pub debt_uuid: String,
     pub file_path: PathBuf,
@@ -150,6 +159,8 @@ pub enum Action {
     Doctor(EmptyParams),
     Transactions(TransactionParams),
     Preview(DebtParams),
+    CommentsList(DebtParams),
+    CommentsCreate(CommentCreateParams),
     Upload(UploadParams),
     AttachmentDelete(AttachmentDeleteParams),
     BookkeepingGet(DebtParams),
@@ -166,6 +177,8 @@ impl Action {
             Self::Doctor(_) => "doctor",
             Self::Transactions(_) => "transactions",
             Self::Preview(_) => "preview",
+            Self::CommentsList(_) => "comments.list",
+            Self::CommentsCreate(_) => "comments.create",
             Self::Upload(_) => "upload",
             Self::AttachmentDelete(_) => "attachments.delete",
             Self::BookkeepingGet(_) => "bookkeeping.get",
@@ -183,8 +196,10 @@ impl Action {
             | Self::BookkeepingCategories(params) => serde_json::to_value(params),
             Self::Transactions(params) => serde_json::to_value(params),
             Self::Preview(params)
+            | Self::CommentsList(params)
             | Self::BookkeepingGet(params)
             | Self::BookkeepingSuggestions(params) => serde_json::to_value(params),
+            Self::CommentsCreate(params) => serde_json::to_value(params),
             Self::Upload(params) => serde_json::to_value(params),
             Self::AttachmentDelete(params) => serde_json::to_value(params),
             Self::BookkeepingSetDescription(params) => serde_json::to_value(params),
@@ -213,6 +228,17 @@ impl Action {
                 Self::Transactions(params)
             }
             "preview" => Self::Preview(validated_debt_params(decode(params)?)?),
+            "comments.list" => Self::CommentsList(validated_debt_params(decode(params)?)?),
+            "comments.create" => {
+                let params: CommentCreateParams = decode(params)?;
+                validate_uuid(&params.debt_uuid, "Debt")?;
+                validate_comment_content(&params.content)?;
+                ensure!(
+                    params.confirmed,
+                    "Comment creation requires explicit confirmation."
+                );
+                Self::CommentsCreate(params)
+            }
             "upload" => {
                 let params: UploadParams = decode(params)?;
                 validate_uuid(&params.debt_uuid, "Debt")?;
@@ -270,6 +296,18 @@ pub fn validate_attachment_code(value: &str) -> Result<()> {
     ensure!(
         !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control),
         "Attachment code must be a nonempty bounded string."
+    );
+    Ok(())
+}
+
+fn validate_comment_content(content: &str) -> Result<()> {
+    ensure!(
+        !content.trim().is_empty(),
+        "Comment content must contain non-whitespace text."
+    );
+    ensure!(
+        content.len() <= MAX_COMMENT_CONTENT_BYTES,
+        "Comment content exceeds the 16384-byte bridge limit."
     );
     Ok(())
 }
@@ -573,6 +611,23 @@ mod tests {
                 json!({"from": "", "to": "", "missingAttachments": "false"}),
             ),
             ("preview", json!({"debtUuid": "not-a-uuid"})),
+            ("comments.list", json!({"debtUuid": "not-a-uuid"})),
+            (
+                "comments.create",
+                json!({
+                    "debtUuid": "11111111-1111-4111-8111-111111111111",
+                    "content": "  \n",
+                    "confirmed": true
+                }),
+            ),
+            (
+                "comments.create",
+                json!({
+                    "debtUuid": "11111111-1111-4111-8111-111111111111",
+                    "content": "comment",
+                    "confirmed": false
+                }),
+            ),
             (
                 "upload",
                 json!({
@@ -638,6 +693,30 @@ mod tests {
                 "accepted malformed parameters for {action}"
             );
         }
+    }
+
+    #[test]
+    fn accepts_confirmed_bounded_comment_content_and_rejects_oversized_content() {
+        let params = json!({
+            "debtUuid": "11111111-1111-4111-8111-111111111111",
+            "content": " exact content\n",
+            "confirmed": true
+        });
+        let signed = signed_value("comments.create", params);
+        let clock = signed["issuedAt"].as_u64().unwrap();
+        let request = verify_request(SECRET, signed, &mut HashMap::new(), clock).unwrap();
+        assert!(matches!(request.action, Action::CommentsCreate(_)));
+
+        let oversized = signed_value(
+            "comments.create",
+            json!({
+                "debtUuid": "11111111-1111-4111-8111-111111111111",
+                "content": "x".repeat(MAX_COMMENT_CONTENT_BYTES + 1),
+                "confirmed": true
+            }),
+        );
+        let clock = oversized["issuedAt"].as_u64().unwrap();
+        assert!(verify_request(SECRET, oversized, &mut HashMap::new(), clock).is_err());
     }
 
     fn signed_value(action: &str, params: Value) -> Value {

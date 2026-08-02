@@ -11,6 +11,7 @@ import {
   projectAttachmentDeletionDebt,
   projectBookkeepingDebt,
   projectCategories,
+  projectCommentPage,
   projectDebtPreview,
   projectSuggestions,
   projectTransactionFeedPage,
@@ -110,6 +111,7 @@ describe("capability policy", () => {
         "transactions.read",
         "attachments.write",
         "attachments.delete",
+        "comments.write",
         "bookkeeping.read",
         "bookkeeping.write",
         "audit.read",
@@ -322,6 +324,60 @@ describe("debt read projections", () => {
         ),
       ).toThrow(/payment account/i);
     }
+  });
+});
+
+describe("comment projections", () => {
+  const valid = {
+    uuid: "55555555-5555-4555-8555-555555555555",
+    content: "Internal note",
+    creator: {
+      uuid: "66666666-6666-4666-8666-666666666666",
+      first_name: "Example",
+      last_name: "User",
+    },
+    create_time: "2026-08-02T12:00:00Z",
+    push_notified: false,
+  };
+
+  test("projects comment identity, creator, timestamp, and notification state", () => {
+    expect(projectCommentPage({ results: [valid], next: null })).toEqual({
+      results: [
+        {
+          uuid: "55555555-5555-4555-8555-555555555555",
+          content: "Internal note",
+          creator: {
+            uuid: "66666666-6666-4666-8666-666666666666",
+            name: "Example User",
+            isHolvi: false,
+          },
+          createTime: "2026-08-02T12:00:00Z",
+          pushNotified: false,
+        },
+      ],
+      next: "",
+    });
+  });
+
+  test("rejects malformed creator, timestamp, notification state, and pages", () => {
+    for (const malformed of [
+      { ...valid, creator: [] },
+      { ...valid, create_time: "not-a-time" },
+      { ...valid, push_notified: "false" },
+    ]) {
+      expect(() =>
+        projectCommentPage({ results: [malformed], next: null }),
+      ).toThrow();
+    }
+    expect(() =>
+      projectCommentPage({
+        results: Array.from({ length: 26 }, () => valid),
+        next: null,
+      }),
+    ).toThrow("exceeded its result limit");
+    expect(() =>
+      projectCommentPage(Array.from({ length: 1001 }, () => valid)),
+    ).toThrow("exceeded its result limit");
   });
 });
 

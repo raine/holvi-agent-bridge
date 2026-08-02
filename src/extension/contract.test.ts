@@ -5,7 +5,11 @@ import {
   auditLimitMax,
   auditLimitMin,
   auditPageSize,
+  commentPageSize,
   maxApiResponseBytes,
+  maxCommentPages,
+  maxCommentResponseBytes,
+  maxCommentResults,
 } from "./holvi-api.js";
 import { nativeMessageTypes, nativeReconnectDelayMs } from "./native-bridge.js";
 import {
@@ -13,6 +17,7 @@ import {
   minimumFileBytes,
   supportedCapabilities,
 } from "./policy.js";
+import { maxCommentContentBytes } from "./projections.js";
 import {
   fileChunkBytes,
   uploadMimeTypes,
@@ -113,6 +118,13 @@ describe("cross-language bridge contract", () => {
     expect(bookkeepingDescriptionMaxBytes).toBe(
       contract.bookkeepingDescriptionBytes.max,
     );
+    expect({
+      contentBytes: maxCommentContentBytes,
+      pageSize: commentPageSize,
+      pages: maxCommentPages,
+      results: maxCommentResults,
+      responseBytes: maxCommentResponseBytes,
+    }).toEqual(contract.commentLimits);
   });
 
   test("matches Native Messaging variants", () => {

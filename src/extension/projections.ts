@@ -10,6 +10,9 @@ const maxAuditEnvelopeResults = 200;
 const maxFeedPageResults = 10_000;
 const maxPaymentMatches = 1000;
 const maxDebtAttachments = 1000;
+const maxCommentPageResults = 25;
+const maxCommentResults = 1000;
+export const maxCommentContentBytes = 16 * 1024;
 const maxProjectionBytes = 512 * 1024;
 
 type JsonRecord = Record<string, unknown>;
@@ -329,6 +332,83 @@ export function projectDebtPreview(
   paymentAccountUuid: string,
 ): JsonRecord {
   return debtRecord(value, debtUuid, paymentAccountUuid, "Debt");
+}
+
+function commentContent(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    new TextEncoder().encode(value).byteLength > maxCommentContentBytes
+  ) {
+    throw new Error(`${label} must be a nonempty bounded string.`);
+  }
+  return value;
+}
+
+function commentCreator(value: unknown): JsonRecord {
+  if (value === null || value === undefined) {
+    return { uuid: null, name: "Holvi", isHolvi: true };
+  }
+  const source = record(value, "Comment creator");
+  const creatorUuid = optionalUuid(source.uuid, "Comment creator UUID");
+  const firstName =
+    optionalString(source.first_name, "Comment creator first name") ??
+    optionalString(source.firstname, "Comment creator first name");
+  const lastName =
+    optionalString(source.last_name, "Comment creator last name") ??
+    optionalString(source.lastname, "Comment creator last name");
+  const name =
+    optionalString(source.name, "Comment creator name") ??
+    optionalString(source.display_name, "Comment creator display name") ??
+    [firstName, lastName].filter(Boolean).join(" ");
+  if (!name) {
+    throw new Error("Comment creator has no bounded display name.");
+  }
+  return { uuid: creatorUuid, name, isHolvi: false };
+}
+
+function comment(value: unknown): JsonRecord {
+  const source = record(value, "Comment");
+  if (typeof source.push_notified !== "boolean") {
+    throw new Error("Comment notification state has an unexpected shape.");
+  }
+  return {
+    uuid: optionalUuid(source.uuid, "Comment UUID"),
+    content: commentContent(source.content, "Comment content"),
+    creator: commentCreator(source.creator),
+    createTime: timestamp(source.create_time, "Comment creation time"),
+    pushNotified: source.push_notified,
+  };
+}
+
+export function projectCommentPage(value: unknown): {
+  results: JsonRecord[];
+  next: string;
+} {
+  if (Array.isArray(value)) {
+    return projection({
+      results: boundedArray(value, "Comment results", maxCommentResults).map(
+        comment,
+      ),
+      next: "",
+    });
+  }
+  const page = record(value, "Comment page");
+  const results = boundedArray(
+    page.results,
+    "Comment page results",
+    maxCommentPageResults,
+  ).map(comment);
+  const next = optionalString(page.next, "Comment next page") ?? "";
+  return projection({ results, next });
+}
+
+export function projectCommentListing<T>(value: T): T {
+  return projection(value);
+}
+
+export function projectCommentWriteResponse(value: unknown): JsonRecord {
+  return projection(comment(value));
 }
 
 export function projectUploadDebtRead(

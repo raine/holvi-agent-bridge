@@ -13,6 +13,9 @@
   var maxFeedPageResults = 1e4;
   var maxPaymentMatches = 1000;
   var maxDebtAttachments = 1000;
+  var maxCommentPageResults = 25;
+  var maxCommentResults = 1000;
+  var maxCommentContentBytes = 16 * 1024;
   var maxProjectionBytes = 512 * 1024;
   function record(value, label) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -215,6 +218,57 @@
   function projectDebtPreview(value, debtUuid, paymentAccountUuid) {
     return debtRecord(value, debtUuid, paymentAccountUuid, "Debt");
   }
+  function commentContent(value, label) {
+    if (typeof value !== "string" || value.length < 1 || new TextEncoder().encode(value).byteLength > maxCommentContentBytes) {
+      throw new Error(`${label} must be a nonempty bounded string.`);
+    }
+    return value;
+  }
+  function commentCreator(value) {
+    if (value === null || value === undefined) {
+      return { uuid: null, name: "Holvi", isHolvi: true };
+    }
+    const source = record(value, "Comment creator");
+    const creatorUuid = optionalUuid(source.uuid, "Comment creator UUID");
+    const firstName = optionalString(source.first_name, "Comment creator first name") ?? optionalString(source.firstname, "Comment creator first name");
+    const lastName = optionalString(source.last_name, "Comment creator last name") ?? optionalString(source.lastname, "Comment creator last name");
+    const name = optionalString(source.name, "Comment creator name") ?? optionalString(source.display_name, "Comment creator display name") ?? [firstName, lastName].filter(Boolean).join(" ");
+    if (!name) {
+      throw new Error("Comment creator has no bounded display name.");
+    }
+    return { uuid: creatorUuid, name, isHolvi: false };
+  }
+  function comment(value) {
+    const source = record(value, "Comment");
+    if (typeof source.push_notified !== "boolean") {
+      throw new Error("Comment notification state has an unexpected shape.");
+    }
+    return {
+      uuid: optionalUuid(source.uuid, "Comment UUID"),
+      content: commentContent(source.content, "Comment content"),
+      creator: commentCreator(source.creator),
+      createTime: timestamp(source.create_time, "Comment creation time"),
+      pushNotified: source.push_notified
+    };
+  }
+  function projectCommentPage(value) {
+    if (Array.isArray(value)) {
+      return projection({
+        results: boundedArray(value, "Comment results", maxCommentResults).map(comment),
+        next: ""
+      });
+    }
+    const page = record(value, "Comment page");
+    const results = boundedArray(page.results, "Comment page results", maxCommentPageResults).map(comment);
+    const next = optionalString(page.next, "Comment next page") ?? "";
+    return projection({ results, next });
+  }
+  function projectCommentListing(value) {
+    return projection(value);
+  }
+  function projectCommentWriteResponse(value) {
+    return projection(comment(value));
+  }
   function projectUploadDebtRead(value, debtUuid, paymentAccountUuid) {
     return debtRecord(value, debtUuid, paymentAccountUuid, "Upload debt");
   }
@@ -384,6 +438,8 @@
     doctor: [],
     transactions: ["transactions.read"],
     preview: ["transactions.read"],
+    "comments.list": ["transactions.read"],
+    "comments.create": ["transactions.read", "comments.write"],
     upload: ["transactions.read", "attachments.write"],
     "attachments.delete": ["transactions.read", "attachments.delete"],
     "bookkeeping.get": ["bookkeeping.read"],
@@ -755,8 +811,290 @@
     }
   }
 
-  // src/extension/commands.ts
+  // src/extension/holvi-api.ts
+  var auditLimitMin = 1;
+  var auditLimitMax = 25;
+  var auditPageSize = 25;
+  var maxApiResponseBytes = 2 * 1024 * 1024;
+  var commentPageSize = 25;
+  var maxCommentPages = 40;
+  var maxCommentResults2 = 1000;
+  var maxCommentResponseBytes = 1024 * 1024;
   function asString(value) {
+    return typeof value === "string" ? value : "";
+  }
+  async function boundedResponseText(response, maxResponseBytes) {
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && /^\d+$/.test(contentLength)) {
+      const declaredLength = Number(contentLength);
+      if (!Number.isSafeInteger(declaredLength) || declaredLength > maxResponseBytes) {
+        throw new Error("Holvi API response exceeded its size limit.");
+      }
+    }
+    if (!response.body) {
+      return "";
+    }
+    const reader = response.body.getReader();
+    const chunks = [];
+    let length = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      length += value.byteLength;
+      if (length > maxResponseBytes) {
+        await reader.cancel();
+        throw new Error("Holvi API response exceeded its size limit.");
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error("Holvi API returned invalid UTF-8.");
+    }
+  }
+  function withinDateRange(payment2, from, to) {
+    const date = asString(payment2.date);
+    return Boolean(date) && (!from || date >= from) && (!to || date <= to);
+  }
+
+  class HolviApi {
+    staticConfig;
+    session;
+    fetchRequest;
+    constructor(staticConfig, session, fetchRequest = fetch) {
+      this.staticConfig = staticConfig;
+      this.session = session;
+      this.fetchRequest = fetchRequest;
+    }
+    async request(auth, apiPath, options = {}, maxResponseBytes = maxApiResponseBytes) {
+      if (!apiPath.startsWith(this.session.apiRoot())) {
+        throw new Error("Refused an API path outside the configured Holvi account.");
+      }
+      const headers = new Headers(options.headers || {});
+      headers.set("Accept", "application/json");
+      headers.set("Authorization", `Bearer ${auth.token}`);
+      if (auth.csrfToken) {
+        headers.set("X-CSRFToken", auth.csrfToken);
+      }
+      const fetchRequest = this.fetchRequest;
+      const response = await fetchRequest(`${this.staticConfig.apiOrigin}${apiPath}`, {
+        ...options,
+        headers,
+        credentials: "include",
+        cache: "no-store",
+        redirect: "error"
+      });
+      const contentType = response.headers.get("content-type") || "";
+      const text = await boundedResponseText(response, maxResponseBytes);
+      let body = text;
+      if (contentType.includes("application/json")) {
+        try {
+          body = JSON.parse(text);
+        } catch {
+          throw new Error("Holvi API returned malformed JSON.");
+        }
+      }
+      if (!response.ok) {
+        const detail = typeof body === "string" ? body.slice(0, 300) : JSON.stringify(body).slice(0, 300);
+        throw new Error(`Holvi API returned ${response.status}: ${detail}`);
+      }
+      return body;
+    }
+    feedPath(cursor = "", missingAttachments = false) {
+      const query = new URLSearchParams({
+        timeline: "past",
+        payment_account: this.session.config.paymentAccountUuid
+      });
+      if (missingAttachments) {
+        query.set("missing_attachments", "true");
+      }
+      if (cursor) {
+        query.set("cursor", cursor);
+      }
+      return `${this.session.apiRoot()}ux/payments-feed/?${query}`;
+    }
+    debtPath(debtUuid) {
+      return `${this.session.apiRoot()}debt/${encodeURIComponent(validateUuid(debtUuid, "debt"))}/`;
+    }
+    commentPath(debtUuid) {
+      return `${this.debtPath(debtUuid)}comment/`;
+    }
+    commentContinuationPath(next, debtUuid) {
+      if (next.length > 4096) {
+        throw new Error("Holvi comment pagination URL exceeded its limit.");
+      }
+      let url;
+      try {
+        url = new URL(next, this.staticConfig.apiOrigin);
+      } catch {
+        throw new Error("Holvi comment pagination URL is invalid.");
+      }
+      const expectedPath = this.commentPath(debtUuid);
+      if (url.origin !== this.staticConfig.apiOrigin || url.pathname !== expectedPath || url.username || url.password || url.hash) {
+        throw new Error("Holvi comment pagination changed the target endpoint.");
+      }
+      return `${expectedPath}${url.search}`;
+    }
+    async transactionFeedPage(auth, cursor = "", missingAttachments = false) {
+      return projectTransactionFeedPage(await this.request(auth, this.feedPath(cursor, missingAttachments)));
+    }
+    async listTransactions(auth, params) {
+      const results = [];
+      const seenCursors = new Set;
+      const missingAttachments = params.missingAttachments === true;
+      let cursor = "";
+      let pages = 0;
+      do {
+        const page = await this.transactionFeedPage(auth, cursor, missingAttachments);
+        for (const item of page.results) {
+          if (withinDateRange(item, asString(params.from), asString(params.to))) {
+            results.push(item);
+          }
+        }
+        pages += 1;
+        if (results.length > this.staticConfig.maxTransactionResults) {
+          throw new Error("The transaction listing exceeded its result limit.");
+        }
+        if (pages >= this.staticConfig.maxTransactionPages && page.hasMore) {
+          throw new Error("The transaction listing exceeded its page limit.");
+        }
+        cursor = page.nextCursor;
+        if (cursor && seenCursors.has(cursor)) {
+          throw new Error("Holvi repeated a pagination cursor.");
+        }
+        seenCursors.add(cursor);
+      } while (cursor);
+      return projectTransactionListing({
+        pages,
+        count: results.length,
+        missingAttachments,
+        results
+      });
+    }
+    async previewDebt(auth, debtUuid) {
+      const validUuid = validateUuid(debtUuid, "debt");
+      return projectDebtPreview(await this.request(auth, this.debtPath(validUuid)), validUuid, this.session.config.paymentAccountUuid);
+    }
+    async listComments(auth, debtUuid) {
+      const validUuid = validateUuid(debtUuid, "debt").toLowerCase();
+      await this.previewDebt(auth, validUuid);
+      const results = [];
+      const seenPages = new Set;
+      let path = `${this.commentPath(validUuid)}?${new URLSearchParams({
+        o: "-create_time",
+        page_size: String(commentPageSize)
+      })}`;
+      let pages = 0;
+      while (path) {
+        if (seenPages.has(path)) {
+          throw new Error("Holvi repeated a comment pagination URL.");
+        }
+        seenPages.add(path);
+        const page = projectCommentPage(await this.request(auth, path, {}, maxCommentResponseBytes));
+        results.push(...page.results);
+        pages += 1;
+        if (results.length > maxCommentResults2) {
+          throw new Error("The comment listing exceeded its result limit.");
+        }
+        if (page.next && pages >= maxCommentPages) {
+          throw new Error("The comment listing exceeded its page limit.");
+        }
+        path = page.next ? this.commentContinuationPath(page.next, validUuid) : "";
+      }
+      for (let index = 1;index < results.length; index += 1) {
+        const previous = results[index - 1];
+        const current = results[index];
+        if (!previous || !current || Date.parse(String(previous.createTime)) < Date.parse(String(current.createTime))) {
+          throw new Error("Holvi comments are not ordered newest first.");
+        }
+      }
+      return projectCommentListing({
+        debtUuid: validUuid,
+        pages,
+        count: results.length,
+        order: "newest-first",
+        results
+      });
+    }
+    async bookkeepingDebt(auth, debtUuid) {
+      const validUuid = validateUuid(debtUuid, "debt");
+      return projectBookkeepingDebt(await this.request(auth, this.debtPath(validUuid)), validUuid);
+    }
+    async bookkeepingCategories(auth) {
+      return projectCategories(await this.request(auth, `${this.session.apiRoot()}category/`));
+    }
+    async bookkeepingSuggestions(auth, debtUuid) {
+      const validUuid = validateUuid(debtUuid, "debt");
+      return projectSuggestions(await this.request(auth, `${this.debtPath(validUuid)}haip/bookkeeping-suggestions/`), validUuid);
+    }
+    async recentAudit(auth, limit) {
+      if (!Number.isSafeInteger(limit) || limit < auditLimitMin || limit > auditLimitMax) {
+        throw new Error("Activity limit must be between 1 and 25.");
+      }
+      return projectAuditPage(await this.request(auth, `${this.session.apiRoot()}log-feed/?o=-timestamp&page_size=${auditPageSize}`), limit);
+    }
+  }
+
+  // src/extension/comment-workflow.ts
+  function validateCommentContent(value) {
+    if (typeof value !== "string" || !value.trim() || new TextEncoder().encode(value).byteLength > maxCommentContentBytes) {
+      throw new Error(`Comment content must contain text and fit within ${maxCommentContentBytes} UTF-8 bytes.`);
+    }
+    return value;
+  }
+  function sameCommentWithoutUuid(candidate, expected) {
+    return candidate.content === expected.content && candidate.createTime === expected.createTime && candidate.pushNotified === expected.pushNotified && JSON.stringify(candidate.creator) === JSON.stringify(expected.creator);
+  }
+
+  class CommentWorkflow {
+    session;
+    api;
+    constructor(session, api) {
+      this.session = session;
+      this.api = api;
+    }
+    async createComment(auth, params) {
+      this.session.requireCapabilities("transactions.read", "comments.write");
+      if (params.confirmed !== true) {
+        throw new Error("Comment creation requires explicit confirmation.");
+      }
+      const debtUuid = validateUuid(typeof params.debtUuid === "string" ? params.debtUuid : "", "debt").toLowerCase();
+      const content = validateCommentContent(params.content);
+      await this.api.previewDebt(auth, debtUuid);
+      const created = projectCommentWriteResponse(await this.api.request(auth, this.api.commentPath(debtUuid), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, notify_push: false })
+      }, maxCommentResponseBytes));
+      if (created.content !== content || created.pushNotified !== false) {
+        throw new Error("Holvi comment creation response did not match the requested content and notification state.");
+      }
+      const listing = await this.api.listComments(auth, debtUuid);
+      const comments = listing.results;
+      const createdUuid = created.uuid;
+      const matches = typeof createdUuid === "string" ? comments.filter((comment2) => typeof comment2.uuid === "string" && comment2.uuid.toLowerCase() === createdUuid.toLowerCase()) : comments.filter((comment2) => sameCommentWithoutUuid(comment2, created));
+      if (matches.length !== 1) {
+        throw new Error("Holvi accepted the comment but an authoritative read could not identify exactly one matching record. Inspect the transaction before retrying.");
+      }
+      const verified = matches[0];
+      if (verified.content !== content || verified.pushNotified !== false) {
+        throw new Error("Holvi accepted the comment but verification found different content or notification state. Inspect the transaction before retrying.");
+      }
+      return { debtUuid, comment: verified };
+    }
+  }
+
+  // src/extension/commands.ts
+  function asString2(value) {
     return typeof value === "string" ? value : "";
   }
   function requiredString(value) {
@@ -779,23 +1117,27 @@
     handlers;
     attachmentDeletion;
     bookkeepingDescriptions;
+    comments;
     constructor(session, api, requestAuth) {
       this.session = session;
       this.api = api;
       this.requestAuth = requestAuth;
       this.attachmentDeletion = new AttachmentDeletionWorkflow(session, api);
       this.bookkeepingDescriptions = new BookkeepingDescriptionWorkflow(session, api);
+      this.comments = new CommentWorkflow(session, api);
       this.handlers = {
         doctor: (auth) => this.doctor(auth),
         transactions: (auth, params) => this.api.listTransactions(auth, params),
-        preview: (auth, params) => this.api.previewDebt(auth, asString(params.debtUuid)),
+        preview: (auth, params) => this.api.previewDebt(auth, asString2(params.debtUuid)),
+        "comments.list": (auth, params) => this.api.listComments(auth, asString2(params.debtUuid)),
+        "comments.create": (auth, params) => this.comments.createComment(auth, params),
         "attachments.delete": (auth, params) => this.attachmentDeletion.deleteAttachment(auth, params),
-        "bookkeeping.get": (auth, params) => this.api.bookkeepingDebt(auth, asString(params.debtUuid)),
+        "bookkeeping.get": (auth, params) => this.api.bookkeepingDebt(auth, asString2(params.debtUuid)),
         "bookkeeping.categories": (auth) => this.api.bookkeepingCategories(auth),
-        "bookkeeping.suggestions": (auth, params) => this.api.bookkeepingSuggestions(auth, asString(params.debtUuid)),
+        "bookkeeping.suggestions": (auth, params) => this.api.bookkeepingSuggestions(auth, asString2(params.debtUuid)),
         "bookkeeping.set-description": (auth, params) => this.bookkeepingDescriptions.change(auth, {
-          debtUuid: asString(params.debtUuid),
-          itemUuid: asString(params.itemUuid),
+          debtUuid: asString2(params.debtUuid),
+          itemUuid: asString2(params.itemUuid),
           description: requiredString(params.description),
           confirmed: asBoolean(params.confirmed)
         }),
@@ -859,175 +1201,6 @@
         };
       }
       return { ...base, probeAction: null };
-    }
-  }
-
-  // src/extension/holvi-api.ts
-  var auditLimitMin = 1;
-  var auditLimitMax = 25;
-  var auditPageSize = 25;
-  var maxApiResponseBytes = 2 * 1024 * 1024;
-  function asString2(value) {
-    return typeof value === "string" ? value : "";
-  }
-  async function boundedResponseText(response) {
-    const contentLength = response.headers.get("content-length");
-    if (contentLength && /^\d+$/.test(contentLength)) {
-      const declaredLength = Number(contentLength);
-      if (!Number.isSafeInteger(declaredLength) || declaredLength > maxApiResponseBytes) {
-        throw new Error("Holvi API response exceeded its size limit.");
-      }
-    }
-    if (!response.body) {
-      return "";
-    }
-    const reader = response.body.getReader();
-    const chunks = [];
-    let length = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      length += value.byteLength;
-      if (length > maxApiResponseBytes) {
-        await reader.cancel();
-        throw new Error("Holvi API response exceeded its size limit.");
-      }
-      chunks.push(value);
-    }
-    const bytes = new Uint8Array(length);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    } catch {
-      throw new Error("Holvi API returned invalid UTF-8.");
-    }
-  }
-  function withinDateRange(payment2, from, to) {
-    const date = asString2(payment2.date);
-    return Boolean(date) && (!from || date >= from) && (!to || date <= to);
-  }
-
-  class HolviApi {
-    staticConfig;
-    session;
-    fetchRequest;
-    constructor(staticConfig, session, fetchRequest = fetch) {
-      this.staticConfig = staticConfig;
-      this.session = session;
-      this.fetchRequest = fetchRequest;
-    }
-    async request(auth, apiPath, options = {}) {
-      if (!apiPath.startsWith(this.session.apiRoot())) {
-        throw new Error("Refused an API path outside the configured Holvi account.");
-      }
-      const headers = new Headers(options.headers || {});
-      headers.set("Accept", "application/json");
-      headers.set("Authorization", `Bearer ${auth.token}`);
-      if (auth.csrfToken) {
-        headers.set("X-CSRFToken", auth.csrfToken);
-      }
-      const fetchRequest = this.fetchRequest;
-      const response = await fetchRequest(`${this.staticConfig.apiOrigin}${apiPath}`, {
-        ...options,
-        headers,
-        credentials: "include",
-        cache: "no-store",
-        redirect: "error"
-      });
-      const contentType = response.headers.get("content-type") || "";
-      const text = await boundedResponseText(response);
-      let body = text;
-      if (contentType.includes("application/json")) {
-        try {
-          body = JSON.parse(text);
-        } catch {
-          throw new Error("Holvi API returned malformed JSON.");
-        }
-      }
-      if (!response.ok) {
-        const detail = typeof body === "string" ? body.slice(0, 300) : JSON.stringify(body).slice(0, 300);
-        throw new Error(`Holvi API returned ${response.status}: ${detail}`);
-      }
-      return body;
-    }
-    feedPath(cursor = "", missingAttachments = false) {
-      const query = new URLSearchParams({
-        timeline: "past",
-        payment_account: this.session.config.paymentAccountUuid
-      });
-      if (missingAttachments) {
-        query.set("missing_attachments", "true");
-      }
-      if (cursor) {
-        query.set("cursor", cursor);
-      }
-      return `${this.session.apiRoot()}ux/payments-feed/?${query}`;
-    }
-    debtPath(debtUuid) {
-      return `${this.session.apiRoot()}debt/${encodeURIComponent(validateUuid(debtUuid, "debt"))}/`;
-    }
-    async transactionFeedPage(auth, cursor = "", missingAttachments = false) {
-      return projectTransactionFeedPage(await this.request(auth, this.feedPath(cursor, missingAttachments)));
-    }
-    async listTransactions(auth, params) {
-      const results = [];
-      const seenCursors = new Set;
-      const missingAttachments = params.missingAttachments === true;
-      let cursor = "";
-      let pages = 0;
-      do {
-        const page = await this.transactionFeedPage(auth, cursor, missingAttachments);
-        for (const item of page.results) {
-          if (withinDateRange(item, asString2(params.from), asString2(params.to))) {
-            results.push(item);
-          }
-        }
-        pages += 1;
-        if (results.length > this.staticConfig.maxTransactionResults) {
-          throw new Error("The transaction listing exceeded its result limit.");
-        }
-        if (pages >= this.staticConfig.maxTransactionPages && page.hasMore) {
-          throw new Error("The transaction listing exceeded its page limit.");
-        }
-        cursor = page.nextCursor;
-        if (cursor && seenCursors.has(cursor)) {
-          throw new Error("Holvi repeated a pagination cursor.");
-        }
-        seenCursors.add(cursor);
-      } while (cursor);
-      return projectTransactionListing({
-        pages,
-        count: results.length,
-        missingAttachments,
-        results
-      });
-    }
-    async previewDebt(auth, debtUuid) {
-      const validUuid = validateUuid(debtUuid, "debt");
-      return projectDebtPreview(await this.request(auth, this.debtPath(validUuid)), validUuid, this.session.config.paymentAccountUuid);
-    }
-    async bookkeepingDebt(auth, debtUuid) {
-      const validUuid = validateUuid(debtUuid, "debt");
-      return projectBookkeepingDebt(await this.request(auth, this.debtPath(validUuid)), validUuid);
-    }
-    async bookkeepingCategories(auth) {
-      return projectCategories(await this.request(auth, `${this.session.apiRoot()}category/`));
-    }
-    async bookkeepingSuggestions(auth, debtUuid) {
-      const validUuid = validateUuid(debtUuid, "debt");
-      return projectSuggestions(await this.request(auth, `${this.debtPath(validUuid)}haip/bookkeeping-suggestions/`), validUuid);
-    }
-    async recentAudit(auth, limit) {
-      if (!Number.isSafeInteger(limit) || limit < auditLimitMin || limit > auditLimitMax) {
-        throw new Error("Activity limit must be between 1 and 25.");
-      }
-      return projectAuditPage(await this.request(auth, `${this.session.apiRoot()}log-feed/?o=-timestamp&page_size=${auditPageSize}`), limit);
     }
   }
 

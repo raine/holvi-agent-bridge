@@ -23,17 +23,17 @@ use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
 use crate::install::{HostRestartStatus, InstallOptions, InstallResult, install_bridge};
 use crate::protocol::{
     Action, AttachmentDeleteParams, AuditListParams, BOOKKEEPING_DESCRIPTION_MAX_BYTES,
-    BookkeepingDescriptionParams, DebtParams, EmptyParams, HOST_BUILD_VERSION,
-    MAX_SOCKET_RESPONSE_BYTES, NATIVE_PROTOCOL_VERSION, TransactionParams, UploadParams,
-    sign_request, validate_attachment_code,
+    BookkeepingDescriptionParams, CommentCreateParams, DebtParams, EmptyParams, HOST_BUILD_VERSION,
+    MAX_COMMENT_CONTENT_BYTES, MAX_SOCKET_RESPONSE_BYTES, NATIVE_PROTOCOL_VERSION,
+    TransactionParams, UploadParams, sign_request, validate_attachment_code,
 };
 use crate::receipt_sandbox::resolve_receipt_file;
 use crate::skill::{self, CodingAgentArg};
 
-const HELP_AFTER: &str = "Commands that contact Holvi require their configured capability. Upload,
-attachment deletion, and bookkeeping description changes are dry runs unless --yes is
-present. The configured signed-in Holvi group tab must remain open in Chrome. Attachment
-paths are restricted by the private local config.";
+const HELP_AFTER: &str =
+    "Commands that contact Holvi require their configured capability. Writes are a dry
+run unless --yes is present. The configured signed-in Holvi group tab must remain
+open in Chrome. Attachment paths are restricted by the private local config.";
 
 #[derive(Parser)]
 #[command(
@@ -62,8 +62,8 @@ enum Command {
     Capabilities(OutputArgs),
     /// Verify the Chrome connection and an API surface
     Doctor(OutputArgs),
-    /// List payment-account transactions
-    Transactions(TransactionArgs),
+    /// List transactions or manage their internal comments
+    Transactions(TransactionsArgs),
     /// Inspect one accounting debt
     Preview(PreviewArgs),
     /// Validate or upload one receipt
@@ -163,6 +163,41 @@ struct InstallArgs {
     /// Print machine-readable JSON
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Args)]
+struct TransactionsArgs {
+    #[command(subcommand)]
+    command: Option<TransactionCommand>,
+    #[command(flatten)]
+    listing: TransactionArgs,
+}
+
+#[derive(Subcommand)]
+enum TransactionCommand {
+    /// Read or create internal transaction comments
+    Comments {
+        #[command(subcommand)]
+        command: CommentCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum CommentCommand {
+    /// List internal comments for one transaction debt
+    List(PreviewArgs),
+    /// Create an internal comment after an authoritative preflight
+    Create(CommentCreateArgs),
+}
+
+#[derive(Args)]
+struct CommentCreateArgs {
+    #[arg(long)]
+    debt: String,
+    #[arg(long, value_parser = parse_comment_content)]
+    content: String,
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Args)]
@@ -320,28 +355,69 @@ pub async fn run() -> Result<()> {
                 print!("{}", format_doctor(doctor, ReportRenderer::auto()));
             }
         }
-        Command::Transactions(args) => {
-            let from = args.from.unwrap_or_default();
-            let to = args.to.unwrap_or_default();
-            ensure!(
-                from.is_empty() || to.is_empty() || from <= to,
-                "--from must be on or before --to."
-            );
-            let result = request_host(
-                &config.hmac_secret,
-                Action::Transactions(TransactionParams {
-                    from,
-                    to,
-                    missing_attachments: args.missing_attachments,
-                }),
-            )
-            .await?;
-            if args.json_output {
-                print_json(&result)?;
-            } else {
-                print_transactions(serde_json::from_value(result)?)
+        Command::Transactions(args) => match args.command {
+            None => {
+                let from = args.listing.from.unwrap_or_default();
+                let to = args.listing.to.unwrap_or_default();
+                ensure!(
+                    from.is_empty() || to.is_empty() || from <= to,
+                    "--from must be on or before --to."
+                );
+                let result = request_host(
+                    &config.hmac_secret,
+                    Action::Transactions(TransactionParams {
+                        from,
+                        to,
+                        missing_attachments: args.listing.missing_attachments,
+                    }),
+                )
+                .await?;
+                if args.listing.json_output {
+                    print_json(&result)?;
+                } else {
+                    print_transactions(serde_json::from_value(result)?)
+                }
             }
-        }
+            Some(TransactionCommand::Comments { command }) => match command {
+                CommentCommand::List(args) => {
+                    validate_uuid(&args.debt, "Debt")?;
+                    print_json(
+                        &request_host(
+                            &config.hmac_secret,
+                            Action::CommentsList(DebtParams {
+                                debt_uuid: args.debt,
+                            }),
+                        )
+                        .await?,
+                    )?;
+                }
+                CommentCommand::Create(args) => {
+                    validate_uuid(&args.debt, "Debt")?;
+                    if args.yes {
+                        print_json(
+                            &request_host(
+                                &config.hmac_secret,
+                                Action::CommentsCreate(CommentCreateParams {
+                                    debt_uuid: args.debt,
+                                    content: args.content,
+                                    confirmed: true,
+                                }),
+                            )
+                            .await?,
+                        )?;
+                    } else {
+                        let preview = request_host(
+                            &config.hmac_secret,
+                            Action::Preview(DebtParams {
+                                debt_uuid: args.debt,
+                            }),
+                        )
+                        .await?;
+                        print_json(&comment_dry_run(preview, args.content))?;
+                    }
+                }
+            },
+        },
         Command::Preview(args) => {
             validate_uuid(&args.debt, "Debt")?;
             print_json(
@@ -499,6 +575,27 @@ fn edit_config(path: &Path) -> Result<()> {
 fn parse_description(value: &str) -> std::result::Result<String, String> {
     if value.len() > BOOKKEEPING_DESCRIPTION_MAX_BYTES {
         return Err("must be at most 4096 bytes".into());
+    }
+    Ok(value.to_owned())
+}
+
+fn comment_dry_run(transaction: Value, content: String) -> Value {
+    json!({
+        "dryRun": true,
+        "transaction": transaction,
+        "content": content,
+        "next": "Repeat the comment creation command with --yes after checking these values.",
+    })
+}
+
+fn parse_comment_content(value: &str) -> std::result::Result<String, String> {
+    if value.trim().is_empty() {
+        return Err("must contain non-whitespace text".into());
+    }
+    if value.len() > MAX_COMMENT_CONTENT_BYTES {
+        return Err(format!(
+            "must not exceed {MAX_COMMENT_CONTENT_BYTES} UTF-8 bytes"
+        ));
     }
     Ok(value.to_owned())
 }
@@ -1258,6 +1355,84 @@ mod tests {
             })
         ));
         assert!(Cli::try_parse_from(["holvi", "audit", "list", "--limit", "26"]).is_err());
+    }
+
+    #[test]
+    fn parses_transaction_comment_commands_and_validates_content() {
+        let list = Cli::try_parse_from([
+            "holvi",
+            "transactions",
+            "comments",
+            "list",
+            "--debt",
+            "11111111-1111-4111-8111-111111111111",
+        ])
+        .unwrap();
+        assert!(matches!(
+            list.command,
+            Some(Command::Transactions(TransactionsArgs {
+                command: Some(TransactionCommand::Comments {
+                    command: CommentCommand::List(_)
+                }),
+                ..
+            }))
+        ));
+
+        let create = Cli::try_parse_from([
+            "holvi",
+            "transactions",
+            "comments",
+            "create",
+            "--debt",
+            "11111111-1111-4111-8111-111111111111",
+            "--content",
+            "exact content",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            create.command,
+            Some(Command::Transactions(TransactionsArgs {
+                command: Some(TransactionCommand::Comments {
+                    command: CommentCommand::Create(CommentCreateArgs { yes: true, .. })
+                }),
+                ..
+            }))
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "holvi",
+                "transactions",
+                "comments",
+                "create",
+                "--debt",
+                "11111111-1111-4111-8111-111111111111",
+                "--content",
+                " \n ",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn comment_dry_run_preserves_the_authoritative_target_and_exact_content() {
+        let transaction = json!({
+            "debtUuid": "11111111-1111-4111-8111-111111111111",
+            "counterparty": "Example merchant"
+        });
+        let content = "exact\ncontent\u{1b}".to_owned();
+        let result = comment_dry_run(transaction.clone(), content.clone());
+        assert_eq!(result["dryRun"], true);
+        assert_eq!(result["transaction"], transaction);
+        assert_eq!(result["content"], content);
+        assert_eq!(
+            serde_json::to_string(&result)
+                .unwrap()
+                .matches("\\n")
+                .count(),
+            1
+        );
+        assert!(!serde_json::to_string(&result).unwrap().contains('\u{1b}'));
     }
 
     #[test]

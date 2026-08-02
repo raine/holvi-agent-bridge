@@ -18,6 +18,8 @@
     "doctor": [],
     "transactions": ["transactions.read"],
     "preview": ["transactions.read"],
+    "comments.list": ["transactions.read"],
+    "comments.create": ["transactions.read", "comments.write"],
     "upload": ["transactions.read", "attachments.write"],
     "attachments.delete": ["transactions.read", "attachments.delete"],
     "bookkeeping.get": ["bookkeeping.read"],
@@ -47,6 +49,13 @@
     "min": 1,
     "max": 25,
     "pageSize": 25
+  },
+  "commentLimits": {
+    "contentBytes": 16384,
+    "pageSize": 25,
+    "pages": 40,
+    "results": 1000,
+    "responseBytes": 1048576
   },
   "timeoutsMs": {
     "signedRequestMaxAge": 30000,
