@@ -3,10 +3,10 @@
 `holvi-agent-bridge` gives local agents capability-scoped access to Holvi
 through an existing signed-in Chrome session.
 
-Chrome acts as the authentication vault. The agent uses a local CLI and does not
-need to navigate or click through the Holvi site. The bridge exposes named
-operations instead of arbitrary authenticated HTTP requests, so each new area of
-Holvi can be added and approved independently.
+Chrome acts as the authentication vault. The agent uses a native `holvi` CLI
+and does not need to navigate through the Holvi site. The bridge exposes named
+operations instead of arbitrary authenticated HTTP requests, so each Holvi area
+can be approved independently.
 
 Receipt handling is the first workflow built on the bridge. It is not the
 boundary of the project.
@@ -23,11 +23,6 @@ An installation explicitly enables capabilities in its private config.
 `attachments.write` operations also require `transactions.read` because the
 bridge checks attachment state immediately before and after a write.
 
-Future capabilities can cover other Holvi areas, such as transaction metadata,
-bookkeeping fields, reports, invoices, and exports. Each capability gets its own
-validated commands, API implementation, and tests. The bridge has no generic
-`fetch` or arbitrary endpoint command.
-
 Inspect the capabilities and operations enabled on a machine:
 
 ```sh
@@ -36,25 +31,28 @@ holvi capabilities
 
 ## Requirements
 
+Runtime requirements:
+
 - macOS or Linux
 - Google Chrome
-- Bun 1.3 or later
-- `tsgo`, installed locally through `@typescript/native-preview`
 - a Holvi account with access to the target company
 - local directories containing any files the agent may attach
 
+The `holvi` executable contains the complete native bridge and the compiled
+Chrome extension. It has no Node or Bun runtime dependency.
+
+Building from source requires Rust 1.85 or later. Extension development also
+uses Bun and the dependencies in `package.json`.
+
 ## Install
 
-Install the development dependencies, build the TypeScript source, and install
-the `holvi` binary globally:
+Build and install the native binary:
 
 ```sh
-bun install
-bun run build
-bun install --global "$PWD"
+cargo install --path . --locked
 ```
 
-Sign in to Holvi in Chrome. Open the company group and then its payment account
+Sign in to Holvi in Chrome. Open the company group and its payment account
 transaction feed. Copy:
 
 - the full group URL, such as
@@ -85,8 +83,11 @@ holvi install \
   --yes
 ```
 
-The installer prints the unpacked extension path. Open `chrome://extensions`,
-enable Developer mode, choose Load unpacked, and select that directory.
+The installer writes the private configuration, installs the Chrome native host
+manifest, and extracts the embedded extension into the application support
+directory. Its JSON output contains the unpacked extension path. Open
+`chrome://extensions`, enable Developer mode, choose Load unpacked, and select
+that directory.
 
 Confirm that Chrome shows this extension ID:
 
@@ -95,9 +96,8 @@ oeedcemphbobfehfmcllmjhhhjgahgeb
 ```
 
 The native host accepts connections from that exact extension ID. Reload the
-signed-in Holvi group tab after loading the extension.
-
-Verify the complete path from the CLI through Chrome to Holvi:
+signed-in Holvi group tab after loading the extension, then verify the complete
+path:
 
 ```sh
 holvi doctor
@@ -111,7 +111,7 @@ List all transactions in a date range:
 holvi transactions --from 2026-07-01 --to 2026-07-31 --json
 ```
 
-Add `--missing-attachments` to return only transactions that have no attachment:
+Add `--missing-attachments` to return only transactions without an attachment:
 
 ```sh
 holvi transactions --from 2026-07-01 --to 2026-07-31 \
@@ -119,9 +119,8 @@ holvi transactions --from 2026-07-01 --to 2026-07-31 \
 ```
 
 The JSON output keeps Holvi's payment UUID and direct-match debt UUID separate.
-Settled transactions normally have a debt UUID. Pending payments can have `null`
-until Holvi creates the debt record used for attachments. Inspect the exact debt
-before selecting a receipt:
+Settled transactions normally have a debt UUID. Pending payments can have
+`null` until Holvi creates the debt record used for attachments.
 
 ```sh
 holvi preview \
@@ -147,18 +146,8 @@ holvi upload \
 ```
 
 The bridge reads the transaction immediately before upload and refuses to
-continue if any attachment already exists. After Holvi accepts the file, it
-reads the transaction again and succeeds only when the attachment count is
-exactly one.
-
-The intended agent sequence is:
-
-1. `transactions --missing-attachments --json`
-2. match a local receipt using transaction date, merchant, amount, and currency
-3. `preview`
-4. `upload` as a dry run
-5. `upload --yes`
-6. `transactions --missing-attachments --json` again for reconciliation
+continue if any attachment exists. After Holvi accepts the file, it reads the
+transaction again and succeeds only when the attachment count is exactly one.
 
 ## Security model
 
@@ -167,11 +156,10 @@ when the extension service worker requests it. The token remains inside the
 extension and is never sent to the native host, CLI, terminal, config file, or
 attachment directory.
 
-**The target account comes from private local config.** The extension manifest
-can run on Holvi group pages, but the native host supplies the configured group
-segment, API pool handle, payment account UUID, and enabled capabilities at
-runtime. The extension uses authentication only from a tab whose full group
-segment matches that config.
+**The target account comes from private local config.** The native host supplies
+the configured group segment, API pool handle, payment account UUID, and enabled
+capabilities at runtime. The extension uses authentication only from a tab whose
+full group segment matches that config.
 
 **Capabilities are checked twice.** The native host maps every command to its
 required capabilities before sending data to Chrome. The extension checks the
@@ -179,12 +167,12 @@ same boundary before calling Holvi. Unknown commands and capabilities fail
 closed.
 
 **The agent gets named operations, not an HTTP proxy.** API paths and methods
-live inside the extension and cannot be supplied by the CLI caller. Adding a
-Holvi feature requires code that validates its input and output.
+live inside the extension and cannot be supplied by the CLI caller.
 
 **Local attachment access is allowlisted.** Files must resolve inside a
-configured root. Absolute paths, realpath containment, file type, and size
-checks prevent accidental access through relative paths or symlink escapes.
+configured root. Absolute paths, canonical path containment, regular file type,
+media type, readability, and size checks prevent relative path and symlink
+escapes.
 
 **Local commands are authenticated.** The installer creates a random HMAC secret
 in a `0600` config file. CLI requests are signed, expire after 30 seconds, and
@@ -192,43 +180,50 @@ carry replay-protected nonces. The native host listens on a user-owned `0600`
 Unix socket and accepts only the stable extension origin.
 
 The bridge protects the boundary between Chrome, the local agent, the configured
-Holvi account, and explicitly approved local files. It does not try to defend
-against processes that already run as the same operating-system user, because
-those processes can read the user's files and browser profile directly.
+Holvi account, and explicitly approved local files. Processes running as the
+same operating-system user can already read that user's files and browser
+profile.
 
 ## Local files
 
-On macOS, configuration lives at:
+On macOS, files live at:
 
 ```text
 ~/Library/Application Support/Holvi Agent Bridge/config.json
+~/Library/Application Support/Holvi Agent Bridge/extension/
 ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/app.holvi_agent_bridge.json
 ```
 
-On Linux, the equivalent files live under the XDG config directory and the
-Google Chrome native messaging directory.
+On Linux, equivalent files live under the XDG config directory and Google
+Chrome native messaging directory.
 
-The private config contains the target account identifiers, enabled
-capabilities, approved attachment roots, upload size limit, and local HMAC
-secret. It does not contain Holvi credentials.
+Config format version 2 remains compatible with existing installations. Running
+`holvi install` reuses a valid private HMAC secret and updates account scope,
+capabilities, receipt roots, the embedded extension, and the native host
+manifest.
 
-## Adding a capability
+## Native architecture
 
-Every addition follows the same shape:
+One Rust executable serves two entry paths:
 
-1. add a stable capability name to `SUPPORTED_CAPABILITIES`
-2. map each native action to its required capabilities
-3. expose a purpose-built CLI command with validated arguments
-4. implement fixed Holvi API paths and methods in the extension
-5. project API responses into a documented agent-facing result
-6. add tests for authorization, validation, failure, and success paths
+- normal invocation provides the `holvi` CLI
+- Chrome invocation with the allowlisted extension origin runs the Native
+  Messaging host
 
-Write capabilities should include a read-before-write precondition and a
-read-after-write verification whenever Holvi exposes the necessary state.
+The host owns the authenticated Unix socket, capability checks, nonce cache,
+request timeout, and Native Messaging framing. Uploads use 480 KiB chunks,
+SHA-256 end-to-end verification, a 25 MiB default limit, explicit confirmation,
+and read-before-write and read-after-write checks in the extension.
+
+The compiled extension files live in `assets/extension` so `cargo install` and
+Nix packages can embed them. `src/extension` remains the TypeScript source of
+truth. `bun run sync:artifacts` rebuilds the extension and refreshes the embedded
+files. The check suite rejects differences between source builds and embedded
+artifacts.
 
 ## Holvi API surfaces
 
-The initial capabilities use these private Holvi application endpoints:
+The capabilities use these Holvi application endpoints:
 
 ```text
 GET  /api/pool/{poolHandle}/ux/payments-feed/
@@ -237,19 +232,27 @@ POST /api/pool/{poolHandle}/attachment/formpost/
 ```
 
 These are application endpoints rather than a supported public API. Holvi can
-change them without notice. Keep dry runs and the test suite in the workflow
+change them without notice. Keep dry runs and the check suite in the workflow
 when updating the bridge.
 
 ## Development
 
-Run strict type checking, build the Chrome and Bun output, and execute the
-tests:
+Install extension dependencies and run the canonical check suite:
 
 ```sh
-bun run check
-bun run test
+bun install --frozen-lockfile
+just check
 ```
 
-Chrome loads `dist/extension`. The native host runs `dist/native/host.js`.
-TypeScript source lives under `src/`. Builds and type checks use the native
-TypeScript compiler, `tsgo`.
+`just check` delegates to `checkle run all`. Checkle verifies Rust formatting,
+Clippy, compilation, builds, Rust tests, extension type checking, extension
+linting and formatting, and embedded artifact consistency.
+
+Useful focused commands:
+
+```sh
+checkle run rust
+checkle run extension
+cargo test protocol
+bun run sync:artifacts
+```

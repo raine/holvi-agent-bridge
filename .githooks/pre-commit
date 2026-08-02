@@ -1,4 +1,2 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-bun "$(git rev-parse --show-toplevel)/.githooks/format-staged.mjs"
+exec checkle pre-commit

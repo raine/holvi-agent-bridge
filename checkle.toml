@@ -1,0 +1,56 @@
+[[check]]
+name = "format-check"
+mode = "rustfmt"
+command = ["cargo", "fmt", "--all", "--", "--check"]
+
+[[check]]
+name = "clippy"
+mode = "cargo"
+command = ["cargo", "clippy", "--all-targets", "--locked", "--message-format=json", "--", "-D", "warnings", "-D", "clippy::all"]
+
+[[check]]
+name = "compile"
+mode = "cargo"
+command = ["cargo", "check", "--all-targets", "--locked", "--message-format=json"]
+
+[[check]]
+name = "build"
+mode = "cargo"
+command = ["cargo", "build", "--all-targets", "--locked", "--message-format=json"]
+
+[[check]]
+name = "test"
+mode = "cargo"
+command = ["cargo", "test", "--all-targets", "--locked", "--message-format=json"]
+
+[[check]]
+name = "extension-types"
+mode = "auto"
+command = ["bun", "run", "check:types"]
+
+[[check]]
+name = "extension-lint"
+mode = "auto"
+command = ["bun", "run", "check:lint"]
+
+[[check]]
+name = "extension-format"
+mode = "auto"
+command = ["bun", "run", "check:format"]
+
+[[check]]
+name = "artifacts"
+mode = "auto"
+command = ["bun", "run", "check:artifacts"]
+
+[[group]]
+name = "all"
+checks = ["format-check", "clippy", "compile", "build", "test", "extension-types", "extension-lint", "extension-format", "artifacts"]
+
+[[group]]
+name = "rust"
+checks = ["format-check", "clippy", "compile", "build", "test"]
+
+[[group]]
+name = "extension"
+checks = ["extension-types", "extension-lint", "extension-format", "artifacts"]

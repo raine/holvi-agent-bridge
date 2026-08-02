@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Holvi Agent Bridge",
+  "version": "0.1.0",
+  "description": "Gives local agents capability-scoped Holvi access through a signed-in Chrome session without exporting credentials.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsiNE3RVHudCurf+a7H3OsbL5rd6Nc+mOdACXqAMmFtT6IjMLVwMGudjLF5gRYg8CJAvOnIvyS8aPSil4aYMFiIdelweH2JoFUJ1jiC7Rt2SX69ce8eHD6bbc8bDiV5vrB7s6aOywmixLk924fH9zDci6Lseo9g3OzD6mUsP9fS4etBw9e4aotAXoy4gJZXgpYn/kwTsUn9xF6P0mCdNQl/Bgl1Am6bi6UuAzLbbUDzCPXjActUp84bR1w7nNlggziRjnRiCbdsZJXyQiMQ1SDBzESF9ruOh3sU4ustKnY5hXd5INTQhiWdV92u5pUpSbRQ6xuu5Fsb9ekKKOiYhaFQIDAQAB",
+  "minimum_chrome_version": "105",
+  "permissions": ["nativeMessaging"],
+  "host_permissions": ["https://holvi.com/api/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://account.app.holvi.com/group/*"],
+      "js": ["config.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
