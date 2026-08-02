@@ -18,6 +18,7 @@ pub const HOST_BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_NATIVE_INPUT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_NATIVE_OUTPUT_BYTES: usize = 1024 * 1024;
 pub const MAX_SOCKET_REQUEST_BYTES: usize = 128 * 1024;
+pub const MAX_SOCKET_RESPONSE_BYTES: usize = MAX_NATIVE_INPUT_BYTES;
 pub const REQUEST_MAX_AGE_MS: u64 = 30_000;
 pub const AUDIT_LIMIT_MIN: u8 = 1;
 pub const AUDIT_LIMIT_MAX: u8 = 25;

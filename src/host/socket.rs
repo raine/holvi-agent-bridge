@@ -16,6 +16,8 @@ use super::LocalRequest;
 use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
 use crate::protocol::{MAX_SOCKET_REQUEST_BYTES, now_millis, verify_request};
 
+const SOCKET_REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub struct LocalSocket {
     listener: UnixListener,
     guard: SocketGuard,
@@ -193,6 +195,16 @@ async fn handle(
 }
 
 async fn read_request(stream: &mut UnixStream) -> Result<Value> {
+    read_request_with_timeout(stream, SOCKET_REQUEST_READ_TIMEOUT).await
+}
+
+async fn read_request_with_timeout(stream: &mut UnixStream, timeout: Duration) -> Result<Value> {
+    tokio::time::timeout(timeout, read_request_body(stream))
+        .await
+        .map_err(|_| anyhow::anyhow!("Local bridge request timed out."))?
+}
+
+async fn read_request_body(stream: &mut UnixStream) -> Result<Value> {
     let mut input = Vec::new();
     loop {
         let mut chunk = [0_u8; 8192];
@@ -227,6 +239,18 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[tokio::test]
+    async fn times_out_incomplete_socket_requests() {
+        let (mut server, mut client) = UnixStream::pair().unwrap();
+        client.write_all(b"{\"version\":1").await.unwrap();
+
+        let error = read_request_with_timeout(&mut server, Duration::from_millis(20))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "Local bridge request timed out.");
+    }
 
     #[tokio::test]
     async fn binds_private_socket_and_removes_it_on_drop() {

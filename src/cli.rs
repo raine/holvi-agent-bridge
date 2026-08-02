@@ -12,7 +12,7 @@ use chrono::NaiveDate;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 use crate::capabilities::{EnabledActions, enabled_actions};
@@ -22,8 +22,9 @@ use crate::config::{
 use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
 use crate::install::{HostRestartStatus, InstallOptions, InstallResult, install_bridge};
 use crate::protocol::{
-    Action, AuditListParams, DebtParams, EmptyParams, HOST_BUILD_VERSION, NATIVE_PROTOCOL_VERSION,
-    TransactionParams, UploadParams, sign_request,
+    Action, AuditListParams, DebtParams, EmptyParams, HOST_BUILD_VERSION,
+    MAX_SOCKET_RESPONSE_BYTES, NATIVE_PROTOCOL_VERSION, TransactionParams, UploadParams,
+    sign_request,
 };
 use crate::receipt_sandbox::resolve_receipt_file;
 use crate::skill::{self, CodingAgentArg};
@@ -465,24 +466,76 @@ async fn request_host(secret: &str, action: Action) -> Result<Value> {
         let mut encoded = serde_json::to_vec(&request)?;
         encoded.push(b'\n');
         socket.write_all(&encoded).await?;
-        let mut line = String::new();
-        BufReader::new(socket).read_line(&mut line).await?;
-        ensure!(!line.is_empty(), "Holvi Agent Bridge returned no response.");
-        let response: Value =
-            serde_json::from_str(&line).context("Holvi Agent Bridge returned invalid JSON.")?;
+        let response = read_host_response(&mut socket).await?;
         ensure!(
             response.get("ok") == Some(&Value::Bool(true)),
             "{}",
-            response
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("Holvi Agent Bridge request failed.")
+            sanitize_terminal_text(
+                response
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Holvi Agent Bridge request failed.")
+            )
         );
         Ok::<_, anyhow::Error>(response.get("data").cloned().unwrap_or(Value::Null))
     })
     .await
     .map_err(|_| anyhow::anyhow!("Holvi Agent Bridge request timed out."))??;
     Ok(response)
+}
+
+async fn read_host_response(stream: &mut UnixStream) -> Result<Value> {
+    read_host_response_with_limit(stream, MAX_SOCKET_RESPONSE_BYTES).await
+}
+
+async fn read_host_response_with_limit(stream: &mut UnixStream, max_bytes: usize) -> Result<Value> {
+    let mut input = Vec::new();
+    loop {
+        let mut chunk = [0_u8; 8192];
+        let count = stream.read(&mut chunk).await?;
+        if count == 0 {
+            ensure!(
+                !input.is_empty(),
+                "Holvi Agent Bridge returned no response."
+            );
+            break;
+        }
+        input.extend_from_slice(&chunk[..count]);
+        if let Some(newline) = input.iter().position(|byte| *byte == b'\n') {
+            ensure!(
+                newline <= max_bytes,
+                "Holvi Agent Bridge response is too large."
+            );
+            input.truncate(newline);
+            break;
+        }
+        ensure!(
+            input.len() <= max_bytes,
+            "Holvi Agent Bridge response is too large."
+        );
+    }
+    serde_json::from_slice(&input).context("Holvi Agent Bridge returned invalid JSON.")
+}
+
+fn sanitize_terminal_text(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '\u{061c}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2066}'..='\u{2069}'
+                )
+            {
+                '\u{fffd}'
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 fn validate_doctor(config: &BridgeConfig, doctor: &DoctorResult) -> Result<()> {
@@ -658,10 +711,12 @@ struct ReportRow {
 
 impl ReportRow {
     fn new(status: ReportStatus, label: impl Into<String>, value: impl Into<String>) -> Self {
+        let label = label.into();
+        let value = value.into();
         Self {
             status,
-            label: label.into(),
-            value: value.into(),
+            label: sanitize_terminal_text(&label),
+            value: sanitize_terminal_text(&value),
         }
     }
 }
@@ -868,7 +923,7 @@ fn print_json(value: &Value) -> Result<()> {
 
 fn format_cell(value: Option<&Value>, width: usize) -> String {
     let text = match value {
-        Some(Value::String(value)) => value.clone(),
+        Some(Value::String(value)) => sanitize_terminal_text(value),
         Some(Value::Number(value)) => value.to_string(),
         Some(Value::Bool(value)) => value.to_string(),
         _ => String::new(),
@@ -967,6 +1022,50 @@ mod tests {
                 command: ConfigCommand::Path
             })
         ));
+    }
+
+    #[test]
+    fn sanitizes_terminal_cells_and_preserves_ordinary_unicode() {
+        let source = "München 東京\x1b[31mred\x1b[0m\r\n\x1b]8;;https://example.test\x07link\x1b]8;;\x07\u{202e}tail\u{2066}";
+        let value = Value::String(source.into());
+        let output = format_cell(Some(&value), 100);
+
+        assert!(output.starts_with("München 東京�[31mred�[0m��"));
+        assert!(output.contains("�]8;;https://example.test�link�]8;;��tail�"));
+        assert!(!output.chars().any(char::is_control));
+        assert!(!output.contains(['\u{202e}', '\u{2066}']));
+    }
+
+    #[test]
+    fn terminal_cell_sanitization_does_not_change_json_output() {
+        let value = json!({
+            "counterparty": "München\n\x1b]0;title\x07\u{202e}tail",
+        });
+        let json_before = serde_json::to_string_pretty(&value).unwrap();
+
+        let cell = format_cell(value.get("counterparty"), 80);
+
+        assert!(cell.contains('�'));
+        assert_eq!(serde_json::to_string_pretty(&value).unwrap(), json_before);
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_socket_responses() {
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        let writer = tokio::spawn(async move {
+            server.write_all(&[b'a'; 33]).await.unwrap();
+            server.shutdown().await.unwrap();
+        });
+
+        let error = read_host_response_with_limit(&mut client, 32)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Holvi Agent Bridge response is too large."
+        );
+        writer.await.unwrap();
     }
 
     #[test]
