@@ -1,5 +1,7 @@
 use serde::ser::{Serialize, SerializeMap, Serializer};
 
+use crate::protocol::Action;
+
 pub const ACTION_CAPABILITIES: [(&str, &[&str]); 8] = [
     ("doctor", &[]),
     ("transactions", &["transactions.read"]),
@@ -11,10 +13,16 @@ pub const ACTION_CAPABILITIES: [(&str, &[&str]); 8] = [
     ("audit.list", &["audit.read"]),
 ];
 
-pub fn required_capabilities(action: &str) -> Option<&'static [&'static str]> {
-    ACTION_CAPABILITIES
-        .iter()
-        .find_map(|(name, capabilities)| (*name == action).then_some(*capabilities))
+pub fn required_capabilities(action: &Action) -> &'static [&'static str] {
+    match action {
+        Action::Doctor(_) => &[],
+        Action::Transactions(_) | Action::Preview(_) => &["transactions.read"],
+        Action::Upload(_) => &["transactions.read", "attachments.write"],
+        Action::BookkeepingGet(_)
+        | Action::BookkeepingCategories(_)
+        | Action::BookkeepingSuggestions(_) => &["bookkeeping.read"],
+        Action::AuditList(_) => &["audit.read"],
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -59,6 +67,11 @@ pub fn enabled_actions(capabilities: &[String]) -> EnabledActions {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
+
+    use crate::protocol::{
+        AuditListParams, DebtParams, EmptyParams, TransactionParams, UploadParams,
+    };
 
     use super::*;
 
@@ -89,8 +102,36 @@ mod tests {
     }
 
     #[test]
-    fn unknown_actions_have_no_capability_mapping() {
-        assert_eq!(required_capabilities("fetch"), None);
+    fn typed_actions_match_the_capability_policy() {
+        let actions = [
+            Action::Doctor(EmptyParams {}),
+            Action::Transactions(TransactionParams {
+                from: String::new(),
+                to: String::new(),
+                missing_attachments: false,
+            }),
+            Action::Preview(DebtParams {
+                debt_uuid: String::new(),
+            }),
+            Action::Upload(UploadParams {
+                debt_uuid: String::new(),
+                file_path: PathBuf::new(),
+                confirmed: true,
+            }),
+            Action::BookkeepingGet(DebtParams {
+                debt_uuid: String::new(),
+            }),
+            Action::BookkeepingCategories(EmptyParams {}),
+            Action::BookkeepingSuggestions(DebtParams {
+                debt_uuid: String::new(),
+            }),
+            Action::AuditList(AuditListParams { limit: 1 }),
+        ];
+        let typed: Vec<_> = actions
+            .iter()
+            .map(|action| (action.name(), required_capabilities(action)))
+            .collect();
+        assert_eq!(typed, ACTION_CAPABILITIES);
     }
 
     #[test]

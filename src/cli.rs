@@ -17,7 +17,9 @@ use tokio::net::UnixStream;
 use crate::capabilities::enabled_actions;
 use crate::config::{config_path, load_config, resolve_receipt_file, socket_path, validate_uuid};
 use crate::install::{InstallOptions, install_bridge};
-use crate::protocol::sign_request;
+use crate::protocol::{
+    Action, AuditListParams, DebtParams, EmptyParams, TransactionParams, UploadParams, sign_request,
+};
 use crate::skill::{self, CodingAgentArg};
 
 const HELP_AFTER: &str =
@@ -226,7 +228,7 @@ pub async fn run() -> Result<()> {
             );
         }
         Command::Doctor => {
-            print_json(&request_host(&config.hmac_secret, "doctor", json!({})).await?)?;
+            print_json(&request_host(&config.hmac_secret, Action::Doctor(EmptyParams {})).await?)?;
         }
         Command::Transactions(args) => {
             let from = args.from.unwrap_or_default();
@@ -237,11 +239,10 @@ pub async fn run() -> Result<()> {
             );
             let result = request_host(
                 &config.hmac_secret,
-                "transactions",
-                json!({
-                    "from": from,
-                    "to": to,
-                    "missingAttachments": args.missing_attachments,
+                Action::Transactions(TransactionParams {
+                    from,
+                    to,
+                    missing_attachments: args.missing_attachments,
                 }),
             )
             .await?;
@@ -256,8 +257,9 @@ pub async fn run() -> Result<()> {
             print_json(
                 &request_host(
                     &config.hmac_secret,
-                    "preview",
-                    json!({"debtUuid": args.debt}),
+                    Action::Preview(DebtParams {
+                        debt_uuid: args.debt,
+                    }),
                 )
                 .await?,
             )?;
@@ -269,11 +271,10 @@ pub async fn run() -> Result<()> {
                 print_json(
                     &request_host(
                         &config.hmac_secret,
-                        "upload",
-                        json!({
-                            "debtUuid": args.debt,
-                            "filePath": receipt.path,
-                            "confirmed": true,
+                        Action::Upload(UploadParams {
+                            debt_uuid: args.debt,
+                            file_path: receipt.path,
+                            confirmed: true,
                         }),
                     )
                     .await?,
@@ -281,8 +282,9 @@ pub async fn run() -> Result<()> {
             } else {
                 let preview = request_host(
                     &config.hmac_secret,
-                    "preview",
-                    json!({"debtUuid": args.debt}),
+                    Action::Preview(DebtParams {
+                        debt_uuid: args.debt,
+                    }),
                 )
                 .await?;
                 print_json(&json!({
@@ -299,15 +301,20 @@ pub async fn run() -> Result<()> {
                 print_json(
                     &request_host(
                         &config.hmac_secret,
-                        "bookkeeping.get",
-                        json!({"debtUuid": args.debt}),
+                        Action::BookkeepingGet(DebtParams {
+                            debt_uuid: args.debt,
+                        }),
                     )
                     .await?,
                 )?;
             }
             BookkeepingCommand::Categories => {
                 print_json(
-                    &request_host(&config.hmac_secret, "bookkeeping.categories", json!({})).await?,
+                    &request_host(
+                        &config.hmac_secret,
+                        Action::BookkeepingCategories(EmptyParams {}),
+                    )
+                    .await?,
                 )?;
             }
             BookkeepingCommand::Suggestions(args) => {
@@ -315,8 +322,9 @@ pub async fn run() -> Result<()> {
                 print_json(
                     &request_host(
                         &config.hmac_secret,
-                        "bookkeeping.suggestions",
-                        json!({"debtUuid": args.debt}),
+                        Action::BookkeepingSuggestions(DebtParams {
+                            debt_uuid: args.debt,
+                        }),
                     )
                     .await?,
                 )?;
@@ -325,8 +333,11 @@ pub async fn run() -> Result<()> {
         Command::Audit { command } => match command {
             AuditCommand::List { limit } => {
                 print_json(
-                    &request_host(&config.hmac_secret, "audit.list", json!({"limit": limit}))
-                        .await?,
+                    &request_host(
+                        &config.hmac_secret,
+                        Action::AuditList(AuditListParams { limit }),
+                    )
+                    .await?,
                 )?;
             }
         },
@@ -373,7 +384,7 @@ fn parse_date(value: &str) -> std::result::Result<String, String> {
         .map_err(|_| "must be a calendar date".into())
 }
 
-async fn request_host(secret: &str, action: &str, params: Value) -> Result<Value> {
+async fn request_host(secret: &str, action: Action) -> Result<Value> {
     let target = socket_path();
     let metadata = match fs::symlink_metadata(&target) {
         Ok(metadata) => metadata,
@@ -390,7 +401,7 @@ async fn request_host(secret: &str, action: &str, params: Value) -> Result<Value
         "The local bridge socket failed its ownership checks."
     );
 
-    let request = sign_request(secret, action, params)?;
+    let request = sign_request(secret, action)?;
     let response = tokio::time::timeout(Duration::from_secs(125), async {
         let mut socket = UnixStream::connect(&target).await.map_err(|error| {
             if matches!(

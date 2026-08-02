@@ -15,11 +15,11 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::capabilities::required_capabilities;
 use crate::config::{
-    BridgeConfig, EXTENSION_ORIGIN, load_config, resolve_receipt_file, socket_path, validate_uuid,
+    BridgeConfig, EXTENSION_ORIGIN, load_config, resolve_receipt_file, socket_path,
 };
 use crate::protocol::{
-    BridgeRequest, MAX_SOCKET_REQUEST_BYTES, NativeMessageDecoder, encode_native_message,
-    now_millis, verify_request,
+    Action, BridgeRequest, MAX_SOCKET_REQUEST_BYTES, NativeMessageDecoder, UploadParams,
+    encode_native_message, now_millis, verify_request,
 };
 
 const FILE_CHUNK_BYTES: usize = 480 * 1024;
@@ -191,18 +191,17 @@ async fn handle_local_request(
         reply: incoming.reply,
         deadline: Instant::now() + REQUEST_TIMEOUT,
     });
-    let sent = if request.action == "upload" {
-        send_upload(&request, config, native_tx).await
-    } else {
-        native_tx
+    let sent = match &request.action {
+        Action::Upload(params) => send_upload(&request.id, params, config, native_tx).await,
+        action => native_tx
             .send(json!({
                 "type": "command",
                 "id": request.id,
-                "action": request.action,
-                "params": request.params,
+                "action": action.name(),
+                "params": action.params(),
             }))
             .await
-            .context("Chrome native output closed.")
+            .context("Chrome native output closed."),
     };
     if let Err(error) = sent {
         finish_active(active, json!({"ok": false, "error": error.to_string()}));
@@ -215,8 +214,7 @@ fn validate_dispatch(
     tab_ready: bool,
     active: bool,
 ) -> Result<()> {
-    let requirements = required_capabilities(&request.action)
-        .ok_or_else(|| anyhow::anyhow!("Unsupported local bridge action."))?;
+    let requirements = required_capabilities(&request.action);
     let missing: Vec<_> = requirements
         .iter()
         .filter(|required| {
@@ -237,32 +235,16 @@ fn validate_dispatch(
         "Open or reload the configured signed-in Holvi group tab in Chrome."
     );
     ensure!(!active, "Another Holvi Agent Bridge request is active.");
-    if request.action == "upload" {
-        ensure!(
-            request.params.get("confirmed") == Some(&Value::Bool(true)),
-            "Receipt upload requires explicit confirmation."
-        );
-    }
     Ok(())
 }
 
 async fn send_upload(
-    request: &BridgeRequest,
+    id: &str,
+    params: &UploadParams,
     config: &BridgeConfig,
     native_tx: &mpsc::Sender<Value>,
 ) -> Result<()> {
-    let file_path = request
-        .params
-        .get("filePath")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let debt_uuid = request
-        .params
-        .get("debtUuid")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    validate_uuid(debt_uuid, "Debt")?;
-    let receipt = resolve_receipt_file(config, Path::new(file_path))?;
+    let receipt = resolve_receipt_file(config, &params.file_path)?;
     let bytes = tokio::fs::read(&receipt.path).await?;
     ensure!(
         bytes.len() as u64 == receipt.size,
@@ -273,8 +255,8 @@ async fn send_upload(
     native_tx
         .send(json!({
             "type": "upload_start",
-            "id": request.id,
-            "debtUuid": debt_uuid,
+            "id": id,
+            "debtUuid": params.debt_uuid,
             "fileName": receipt.file_name,
             "mimeType": receipt.mime_type,
             "size": bytes.len(),
@@ -287,7 +269,7 @@ async fn send_upload(
         native_tx
             .send(json!({
                 "type": "upload_chunk",
-                "id": request.id,
+                "id": id,
                 "index": index,
                 "data": base64::engine::general_purpose::STANDARD.encode(chunk),
             }))
@@ -295,7 +277,7 @@ async fn send_upload(
             .context("Chrome native output closed.")?;
     }
     native_tx
-        .send(json!({"type": "upload_end", "id": request.id}))
+        .send(json!({"type": "upload_end", "id": id}))
         .await
         .context("Chrome native output closed.")?;
     Ok(())
@@ -453,30 +435,18 @@ async fn native_writer(mut receiver: mpsc::Receiver<Value>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::protocol::{AuditListParams, DebtParams, EmptyParams};
+
     use super::*;
 
     #[test]
-    fn new_actions_enforce_their_own_capabilities() {
-        let mut config = BridgeConfig {
-            version: 2,
-            group_path_segment: "AbC123+example".into(),
-            pool_handle: "AbC123".into(),
-            payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
-            capabilities: vec!["bookkeeping.read".into()],
-            receipt_roots: vec![],
-            max_file_bytes: 1024,
-            hmac_secret: "a".repeat(64),
-        };
-        let mut request = BridgeRequest {
-            version: 1,
-            id: "11111111-1111-4111-8111-111111111111".into(),
-            issued_at: 0,
-            nonce: "a".repeat(32),
-            action: "bookkeeping.get".into(),
-            params: json!({}),
-        };
+    fn typed_actions_enforce_their_own_capabilities() {
+        let mut config = test_config(vec!["bookkeeping.read".into()]);
+        let mut request = test_request(Action::BookkeepingGet(DebtParams {
+            debt_uuid: "11111111-1111-4111-8111-111111111111".into(),
+        }));
         assert!(validate_dispatch(&request, &config, true, false).is_ok());
-        request.action = "audit.list".into();
+        request.action = Action::AuditList(AuditListParams { limit: 1 });
         assert!(validate_dispatch(&request, &config, true, false).is_err());
         config.capabilities = vec!["audit.read".into()];
         assert!(validate_dispatch(&request, &config, true, false).is_ok());
@@ -484,47 +454,42 @@ mod tests {
 
     #[test]
     fn doctor_accepts_every_valid_capability_set() {
-        let config = BridgeConfig {
-            version: 2,
-            group_path_segment: "AbC123+example".into(),
-            pool_handle: "AbC123".into(),
-            payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
-            capabilities: vec!["audit.read".into()],
-            receipt_roots: vec![],
-            max_file_bytes: 1024,
-            hmac_secret: "a".repeat(64),
-        };
-        let request = BridgeRequest {
-            version: 1,
-            id: "11111111-1111-4111-8111-111111111111".into(),
-            issued_at: 0,
-            nonce: "a".repeat(32),
-            action: "doctor".into(),
-            params: json!({}),
-        };
+        let config = test_config(vec!["audit.read".into()]);
+        let request = test_request(Action::Doctor(EmptyParams {}));
         assert!(validate_dispatch(&request, &config, true, false).is_ok());
     }
 
     #[test]
-    fn upload_dispatch_requires_confirmation() {
-        let config = BridgeConfig {
+    fn upload_dispatch_requires_both_capabilities() {
+        let config = test_config(vec!["transactions.read".into()]);
+        let request = test_request(Action::Upload(UploadParams {
+            debt_uuid: "11111111-1111-4111-8111-111111111111".into(),
+            file_path: PathBuf::from("/tmp/receipt.pdf"),
+            confirmed: true,
+        }));
+        assert!(validate_dispatch(&request, &config, true, false).is_err());
+    }
+
+    fn test_config(capabilities: Vec<String>) -> BridgeConfig {
+        BridgeConfig {
             version: 2,
             group_path_segment: "AbC123+example".into(),
             pool_handle: "AbC123".into(),
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
-            capabilities: vec!["transactions.read".into(), "attachments.write".into()],
+            capabilities,
             receipt_roots: vec![PathBuf::from("/tmp")],
             max_file_bytes: 1024,
             hmac_secret: "a".repeat(64),
-        };
-        let request = BridgeRequest {
+        }
+    }
+
+    fn test_request(action: Action) -> BridgeRequest {
+        BridgeRequest {
             version: 1,
             id: "11111111-1111-4111-8111-111111111111".into(),
             issued_at: 0,
             nonce: "a".repeat(32),
-            action: "upload".into(),
-            params: json!({}),
-        };
-        assert!(validate_dispatch(&request, &config, true, false).is_err());
+            action,
+        }
     }
 }

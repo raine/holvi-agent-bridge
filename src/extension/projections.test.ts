@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import policyFixture from "../../capability-policy.json";
 import {
   actionCapabilities,
+  commandActions,
   requiredCapabilities,
   supportedCapabilities,
 } from "./policy.js";
@@ -82,6 +83,12 @@ describe("capability policy", () => {
   test("matches the cross-language policy fixture", () => {
     expect(JSON.stringify(actionCapabilities)).toBe(
       JSON.stringify(policyFixture),
+    );
+  });
+
+  test("keeps ordinary command handlers exhaustive with policy", () => {
+    expect(Object.keys(commandActions)).toEqual(
+      Object.keys(actionCapabilities).filter((action) => action !== "upload"),
     );
   });
 

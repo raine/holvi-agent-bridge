@@ -349,8 +349,11 @@
     "audit.list": ["audit.read"]
   };
   var supportedCapabilities = new Set(Object.values(actionCapabilities).flat());
+  function isBridgeAction(action) {
+    return Object.hasOwn(actionCapabilities, action);
+  }
   function requiredCapabilities(action) {
-    return Object.hasOwn(actionCapabilities, action) ? actionCapabilities[action] : null;
+    return isBridgeAction(action) ? actionCapabilities[action] : null;
   }
 
   // src/extension/upload-transfer.ts
@@ -836,67 +839,67 @@
       attachmentCountAfter: afterCount
     };
   }
+  async function doctor(auth) {
+    const base = {
+      connected: true,
+      groupPathSegment: runtimeConfig?.groupPathSegment,
+      poolHandle: runtimeConfig?.poolHandle,
+      paymentAccountUuid: runtimeConfig?.paymentAccountUuid,
+      capabilities: runtimeConfig?.capabilities
+    };
+    if (runtimeConfig?.capabilities.includes("transactions.read")) {
+      requireCapabilities("transactions.read");
+      const page = projectTransactionFeedPage(await apiRequest(auth, feedPath()));
+      return {
+        ...base,
+        probeAction: "transactions",
+        firstPageResults: page.results.length
+      };
+    }
+    if (runtimeConfig?.capabilities.includes("bookkeeping.read")) {
+      requireCapabilities("bookkeeping.read");
+      const categories = await bookkeepingCategories(auth);
+      return {
+        ...base,
+        probeAction: "bookkeeping.categories",
+        categoryCount: categories.length
+      };
+    }
+    if (runtimeConfig?.capabilities.includes("audit.read")) {
+      requireCapabilities("audit.read");
+      const audit = await recentAudit(auth, 1);
+      return {
+        ...base,
+        probeAction: "audit.list",
+        recentActivityCount: audit.returnedCount
+      };
+    }
+    return { ...base, probeAction: null };
+  }
+  var commandHandlers = {
+    doctor: (auth) => doctor(auth),
+    transactions: (auth, params) => listTransactions(auth, params),
+    preview: (auth, params) => previewDebt(auth, asString(params.debtUuid)),
+    "bookkeeping.get": (auth, params) => bookkeepingDebt(auth, asString(params.debtUuid)),
+    "bookkeeping.categories": (auth) => bookkeepingCategories(auth),
+    "bookkeeping.suggestions": (auth, params) => bookkeepingSuggestions(auth, asString(params.debtUuid)),
+    "audit.list": (auth, params) => recentAudit(auth, params.limit)
+  };
   async function handleCommand(message) {
     const action = message.action || "";
+    if (!isBridgeAction(action)) {
+      throw new Error("The local helper requested an unsupported action.");
+    }
     const requirements = requiredCapabilities(action);
     if (!requirements) {
       throw new Error("The local helper requested an unsupported action.");
     }
     requireCapabilities(...requirements);
-    const auth = await requestAuth();
-    switch (action) {
-      case "doctor": {
-        const base = {
-          connected: true,
-          groupPathSegment: runtimeConfig?.groupPathSegment,
-          poolHandle: runtimeConfig?.poolHandle,
-          paymentAccountUuid: runtimeConfig?.paymentAccountUuid,
-          capabilities: runtimeConfig?.capabilities
-        };
-        if (runtimeConfig?.capabilities.includes("transactions.read")) {
-          requireCapabilities("transactions.read");
-          const page = projectTransactionFeedPage(await apiRequest(auth, feedPath()));
-          return {
-            ...base,
-            probeAction: "transactions",
-            firstPageResults: page.results.length
-          };
-        }
-        if (runtimeConfig?.capabilities.includes("bookkeeping.read")) {
-          requireCapabilities("bookkeeping.read");
-          const categories = await bookkeepingCategories(auth);
-          return {
-            ...base,
-            probeAction: "bookkeeping.categories",
-            categoryCount: categories.length
-          };
-        }
-        if (runtimeConfig?.capabilities.includes("audit.read")) {
-          requireCapabilities("audit.read");
-          const audit = await recentAudit(auth, 1);
-          return {
-            ...base,
-            probeAction: "audit.list",
-            recentActivityCount: audit.returnedCount
-          };
-        }
-        return { ...base, probeAction: null };
-      }
-      case "transactions":
-        return listTransactions(auth, message.params || {});
-      case "preview":
-        return previewDebt(auth, asString(message.params?.debtUuid));
-      case "bookkeeping.get":
-        return bookkeepingDebt(auth, asString(message.params?.debtUuid));
-      case "bookkeeping.categories":
-        return bookkeepingCategories(auth);
-      case "bookkeeping.suggestions":
-        return bookkeepingSuggestions(auth, asString(message.params?.debtUuid));
-      case "audit.list":
-        return recentAudit(auth, message.params?.limit);
-      default:
-        throw new Error("The local helper requested an unsupported action.");
+    if (action === "upload") {
+      throw new Error("Receipt uploads require transfer messages.");
     }
+    const auth = await requestAuth();
+    return commandHandlers[action](auth, message.params || {});
   }
   async function finishUpload(upload) {
     const auth = await requestAuth();
