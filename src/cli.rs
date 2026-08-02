@@ -23,7 +23,11 @@ const HELP_AFTER: &str =
 Chrome. Attachment paths are restricted by the private local config.";
 
 #[derive(Parser)]
-#[command(name = "holvi", about = "Holvi Agent Bridge", after_help = HELP_AFTER)]
+#[command(
+    name = "holvi",
+    about = "Access Holvi through the local agent bridge",
+    after_help = HELP_AFTER
+)]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -31,18 +35,26 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Configure the account and register the extension
     Install(InstallArgs),
     /// Print or install the coding-agent skill
     Skill(SkillCommand),
+    /// Show enabled capabilities and operations
     Capabilities,
+    /// Verify the Chrome connection and an API surface
     Doctor,
+    /// List payment-account transactions
     Transactions(TransactionArgs),
+    /// Inspect one accounting debt
     Preview(PreviewArgs),
+    /// Validate or upload one receipt
     Upload(UploadArgs),
+    /// Read bookkeeping details and category data
     Bookkeeping {
         #[command(subcommand)]
         command: BookkeepingCommand,
     },
+    /// Read recent account activity
     Audit {
         #[command(subcommand)]
         command: AuditCommand,
@@ -51,13 +63,17 @@ enum Command {
 
 #[derive(Subcommand)]
 enum BookkeepingCommand {
+    /// Inspect bookkeeping details and active line items
     Get(PreviewArgs),
+    /// List bookkeeping categories
     Categories,
+    /// List suggested category codes for one debt
     Suggestions(PreviewArgs),
 }
 
 #[derive(Subcommand)]
 enum AuditCommand {
+    /// List recent pool activity
     List {
         #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u8).range(1..=25))]
         limit: u8,
@@ -440,6 +456,29 @@ mod tests {
             parse_date("2026-02-31").unwrap_err(),
             "must be a calendar date"
         );
+    }
+
+    #[test]
+    fn every_command_help_includes_a_description() {
+        fn assert_described(mut command: clap::Command, path: &str) {
+            let description = command
+                .get_about()
+                .unwrap_or_else(|| panic!("{path} has no description"))
+                .to_string();
+            let help = command.render_help().to_string();
+            assert!(
+                help.contains(&description),
+                "{path} help does not contain its description: {description}"
+            );
+
+            let subcommands = command.get_subcommands().cloned().collect::<Vec<_>>();
+            for subcommand in subcommands {
+                let subcommand_path = format!("{path} {}", subcommand.get_name());
+                assert_described(subcommand, &subcommand_path);
+            }
+        }
+
+        assert_described(Cli::command(), "holvi");
     }
 
     #[test]

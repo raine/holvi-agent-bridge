@@ -240,9 +240,11 @@ details, field changes, continuation URLs, and unprojected response fields.
 | [`transactions`](#holvi-transactions)                       | `transactions.read`                                        | List payment-account transactions                 |
 | [`preview`](#holvi-preview)                                 | `transactions.read`                                        | Inspect one accounting debt                       |
 | [`upload`](#holvi-upload)                                   | `transactions.read`, plus `attachments.write` with `--yes` | Validate or upload one receipt                    |
+| [`bookkeeping`](#holvi-bookkeeping)                         | `bookkeeping.read`                                         | Read bookkeeping details and category data        |
 | [`bookkeeping get`](#holvi-bookkeeping-get)                 | `bookkeeping.read`                                         | Inspect bookkeeping details and active line items |
 | [`bookkeeping categories`](#holvi-bookkeeping-categories)   | `bookkeeping.read`                                         | List bookkeeping categories                       |
 | [`bookkeeping suggestions`](#holvi-bookkeeping-suggestions) | `bookkeeping.read`                                         | List suggested category codes for one debt        |
+| [`audit`](#holvi-audit)                                     | `audit.read`                                               | Read recent account activity                      |
 | [`audit list`](#holvi-audit-list)                           | `audit.read`                                               | List recent pool activity                         |
 
 ### `holvi install`
@@ -391,6 +393,14 @@ that the resulting attachment count is exactly one.
 Accepted files are nonempty PDF, PNG, JPEG, or GIF files within the configured
 size limit. Canonical path checks reject relative paths and symlink escapes.
 
+### `holvi bookkeeping`
+
+Groups the commands that read bookkeeping details and category data.
+
+```sh
+holvi bookkeeping <COMMAND>
+```
+
 ### `holvi bookkeeping get`
 
 Reads the authoritative accounting document for a debt and prints a strict JSON
@@ -427,6 +437,14 @@ holvi bookkeeping suggestions --debt UUID
 The JSON result contains `debtUuid` and `categoryCodes`. Suggestion records are
 normalized to category codes, bounded to 100 entries, and reject unknown item
 shapes.
+
+### `holvi audit`
+
+Groups the commands that read recent account activity.
+
+```sh
+holvi audit <COMMAND>
+```
 
 ### `holvi audit list`
 
