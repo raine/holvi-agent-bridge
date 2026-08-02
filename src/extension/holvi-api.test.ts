@@ -91,6 +91,22 @@ describe("Holvi API boundary", () => {
     });
   });
 
+  test("invokes fetch without an object receiver", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const fetchRequest = async function (
+      this: unknown,
+      _input: string | URL | Request,
+      _init?: RequestInit,
+    ) {
+      expect(this).toBeUndefined();
+      return jsonResponse({ ok: true });
+    };
+    const api = new HolviApi(staticConfig, session, fetchRequest);
+
+    await api.request(auth, `${session.apiRoot()}category/`);
+  });
+
   test("paginates with scoped account parameters and filters dates", async () => {
     const session = new BridgeSession(staticConfig);
     session.configure(runtimeConfig);

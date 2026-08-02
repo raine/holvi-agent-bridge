@@ -55,7 +55,8 @@ export class HolviApi {
       headers.set("X-CSRFToken", auth.csrfToken);
     }
 
-    const response = await this.fetchRequest(
+    const fetchRequest = this.fetchRequest;
+    const response = await fetchRequest(
       `${this.staticConfig.apiOrigin}${apiPath}`,
       {
         ...options,

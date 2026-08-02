@@ -558,7 +558,8 @@
       if (auth.csrfToken) {
         headers.set("X-CSRFToken", auth.csrfToken);
       }
-      const response = await this.fetchRequest(`${this.staticConfig.apiOrigin}${apiPath}`, {
+      const fetchRequest = this.fetchRequest;
+      const response = await fetchRequest(`${this.staticConfig.apiOrigin}${apiPath}`, {
         ...options,
         headers,
         credentials: "include",
