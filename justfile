@@ -52,3 +52,11 @@ install-dev:
 # Run the CLI
 run *ARGS:
     cargo run -- "$@"
+
+# Internal release helper
+_release bump:
+    @cargo-release {{bump}}
+
+# Release a new patch version
+release *ARGS:
+    @just _release patch {{ARGS}}
