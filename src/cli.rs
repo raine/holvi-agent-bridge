@@ -146,9 +146,6 @@ struct InstallArgs {
     /// Allow receipt files below this directory (repeatable)
     #[arg(long = "receipt-root")]
     receipt_roots: Vec<PathBuf>,
-    /// Confirm native host registration
-    #[arg(long)]
-    yes: bool,
     /// Print machine-readable JSON
     #[arg(long)]
     json: bool,
@@ -229,7 +226,6 @@ pub async fn run() -> Result<()> {
     if let Command::Install(args) = command {
         let json_output = args.json;
         let result = install_bridge(InstallOptions {
-            confirmed: args.yes,
             group_url: args.group_url,
             payment_account_uuid: args.account,
             capabilities: args.capabilities,
@@ -1248,7 +1244,6 @@ mod tests {
             "11111111-1111-4111-8111-111111111111",
             "--capability",
             "transactions.read",
-            "--yes",
             "--json",
         ])
         .unwrap();
@@ -1275,7 +1270,6 @@ mod tests {
             "/receipts/one",
             "--receipt-root",
             "/receipts/two",
-            "--yes",
         ])
         .unwrap();
         let Some(Command::Install(args)) = cli.command else {
@@ -1283,6 +1277,5 @@ mod tests {
         };
         assert_eq!(args.capabilities.len(), 2);
         assert_eq!(args.receipt_roots.len(), 2);
-        assert!(args.yes);
     }
 }

@@ -38,7 +38,6 @@ const EXTENSION_FILES: [(&str, &[u8]); 4] = [
 ];
 
 pub struct InstallOptions {
-    pub confirmed: bool,
     pub group_url: String,
     pub payment_account_uuid: String,
     pub capabilities: Vec<String>,
@@ -92,10 +91,6 @@ fn install_bridge_with_layout(
     manifest_directory: PathBuf,
     executable: PathBuf,
 ) -> Result<InstallResult> {
-    ensure!(
-        options.confirmed,
-        "Installation requires --yes because it registers a Chrome native host."
-    );
     ensure!(
         !options.capabilities.is_empty(),
         "Installation requires at least one --capability."
@@ -527,7 +522,6 @@ mod tests {
         let executable = env::current_exe().unwrap().canonicalize().unwrap();
         let result = install_bridge_with_layout(
             InstallOptions {
-                confirmed: true,
                 group_url: "https://account.app.holvi.com/group/AbC123+example/".into(),
                 payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
                 capabilities: vec!["transactions.read".into(), "attachments.write".into()],
@@ -657,7 +651,6 @@ mod tests {
         let manifest_directory = temporary.path().join("chrome");
         let executable = env::current_exe().unwrap().canonicalize().unwrap();
         let options = || InstallOptions {
-            confirmed: true,
             group_url: "https://account.app.holvi.com/group/AbC123+example/".into(),
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
             capabilities: vec!["transactions.read".into(), "attachments.write".into()],

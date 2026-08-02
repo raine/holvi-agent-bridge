@@ -107,12 +107,10 @@ holvi install \
   --group-url 'https://account.app.holvi.com/group/AbC123+example-company/' \
   --account 11111111-1111-4111-8111-111111111111 \
   --capability transactions.read \
-  --receipt-root /absolute/path/to/receipts \
-  --yes
+  --receipt-root /absolute/path/to/receipts
 ```
 
 - Repeat `--capability` and `--receipt-root` for each approved value.
-- `--yes` confirms native-host registration. It is required for installation.
 - `attachments.write` requires at least one receipt root.
 - Installation updates the private account scope and capability allowlist. Show
   the proposed scope to the user before running it.

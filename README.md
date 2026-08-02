@@ -93,8 +93,7 @@ holvi install \
   --account '11111111-1111-4111-8111-111111111111' \
   --capability transactions.read \
   --capability attachments.write \
-  --receipt-root '/absolute/path/to/receipts' \
-  --yes
+  --receipt-root '/absolute/path/to/receipts'
 ```
 
 A read-only installation omits `attachments.write` and does not need a receipt
@@ -104,8 +103,7 @@ root:
 holvi install \
   --group-url 'https://account.app.holvi.com/group/AbC123+example-company/' \
   --account '11111111-1111-4111-8111-111111111111' \
-  --capability transactions.read \
-  --yes
+  --capability transactions.read
 ```
 
 The `holvi install` command prepares both parts of the bridge. Complete the
@@ -263,7 +261,6 @@ holvi install \
   --capability CAPABILITY \
   [--capability CAPABILITY] \
   [--receipt-root /absolute/path] \
-  --yes \
   [--json]
 ```
 
@@ -273,7 +270,6 @@ holvi install \
 | `--account UUID`          | yes      | Payment account UUID used by the transaction feed   |
 | `--capability CAPABILITY` | yes      | Capability to enable, repeatable                    |
 | `--receipt-root PATH`     | no       | Approved absolute attachment directory, repeatable  |
-| `--yes`                   | yes      | Confirm registration of the Chrome native host      |
 | `--json`                  | no       | Print the installation result as JSON               |
 
 `attachments.write` requires at least one receipt root. The default completion
