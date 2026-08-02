@@ -260,6 +260,7 @@ export class HolviApi {
   ): Promise<string | null> {
     const seenCursors = new Set<string>();
     let cursor = "";
+    let paymentUuid: string | null = null;
     let pages = 0;
     let results = 0;
 
@@ -275,11 +276,14 @@ export class HolviApi {
           typeof item.debtUuid === "string" &&
           item.debtUuid.toLowerCase() === debtUuid.toLowerCase(),
       );
-      if (matches.length > 1) {
+      if (
+        matches.length > 1 ||
+        (matches.length === 1 && paymentUuid !== null)
+      ) {
         throw new Error("Holvi returned an ambiguous payment match.");
       }
       if (matches.length === 1) {
-        return asString(matches[0]?.paymentUuid) || null;
+        paymentUuid = asString(matches[0]?.paymentUuid) || null;
       }
       if (pages >= this.staticConfig.maxTransactionPages && page.hasMore) {
         throw new Error("The transaction lookup exceeded its page limit.");
@@ -291,7 +295,7 @@ export class HolviApi {
       seenCursors.add(cursor);
     } while (cursor);
 
-    return null;
+    return paymentUuid;
   }
 
   async transactionDetails(

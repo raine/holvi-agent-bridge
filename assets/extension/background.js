@@ -1148,6 +1148,7 @@
     async paymentUuidForDebt(auth, debtUuid) {
       const seenCursors = new Set;
       let cursor = "";
+      let paymentUuid = null;
       let pages = 0;
       let results = 0;
       do {
@@ -1158,11 +1159,11 @@
           throw new Error("The transaction lookup exceeded its result limit.");
         }
         const matches = page.results.filter((item) => typeof item.debtUuid === "string" && item.debtUuid.toLowerCase() === debtUuid.toLowerCase());
-        if (matches.length > 1) {
+        if (matches.length > 1 || matches.length === 1 && paymentUuid !== null) {
           throw new Error("Holvi returned an ambiguous payment match.");
         }
         if (matches.length === 1) {
-          return asString(matches[0]?.paymentUuid) || null;
+          paymentUuid = asString(matches[0]?.paymentUuid) || null;
         }
         if (pages >= this.staticConfig.maxTransactionPages && page.hasMore) {
           throw new Error("The transaction lookup exceeded its page limit.");
@@ -1173,7 +1174,7 @@
         }
         seenCursors.add(cursor);
       } while (cursor);
-      return null;
+      return paymentUuid;
     }
     async transactionDetails(auth, debtUuid) {
       const validUuid = validateUuid(debtUuid, "debt");

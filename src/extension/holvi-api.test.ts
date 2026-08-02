@@ -141,6 +141,7 @@ describe("Holvi API boundary", () => {
     const cardProfileUuid = "55555555-5555-4555-8555-555555555555";
     const paymentUuid = "33333333-3333-4333-8333-333333333333";
     const urls: string[] = [];
+    let feedPages = 0;
     const api = new HolviApi(staticConfig, session, async (input) => {
       const url = requestUrl(input);
       urls.push(url);
@@ -165,15 +166,20 @@ describe("Holvi API boundary", () => {
         });
       }
       if (url.includes("/ux/payments-feed/")) {
-        return jsonResponse({
-          results: [
-            {
-              ...payment(paymentUuid, "2026-08-02T10:15:00Z"),
-              matches: [{ match_type: "direct", uuid: debtUuid }],
-            },
-          ],
-          pagination: { has_more: false },
-        });
+        feedPages += 1;
+        return jsonResponse(
+          feedPages === 1
+            ? {
+                results: [
+                  {
+                    ...payment(paymentUuid, "2026-08-02T10:15:00Z"),
+                    matches: [{ match_type: "direct", uuid: debtUuid }],
+                  },
+                ],
+                pagination: { has_more: true, next_cursor: "cursor-2" },
+              }
+            : { results: [], pagination: { has_more: false } },
+        );
       }
       if (url.endsWith(`/cardprofile/${cardProfileUuid}/`)) {
         return jsonResponse({
@@ -236,9 +242,62 @@ describe("Holvi API boundary", () => {
         "https://holvi.com/api/pool/example/",
       ]),
     );
-    expect(urls.find((url) => url.includes("payments-feed"))).toContain(
+    const feedUrls = urls.filter((url) => url.includes("payments-feed"));
+    expect(feedUrls).toHaveLength(2);
+    expect(feedUrls[0]).toContain(
       `payment_account=${runtimeConfig.paymentAccountUuid}`,
     );
+    expect(feedUrls[1]).toContain("cursor=cursor-2");
+  });
+
+  test("rejects matching payments split across feed pages", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    let feedPage = 0;
+    const api = new HolviApi(staticConfig, session, async (input) => {
+      const url = requestUrl(input);
+      if (url.endsWith(`/debt/${debtUuid}/`)) {
+        return jsonResponse(debt());
+      }
+      if (url.endsWith("/api/pool/example/")) {
+        return jsonResponse({
+          paymentaccounts: [
+            {
+              uuid: runtimeConfig.paymentAccountUuid,
+              name: "Main account",
+              iban: "FI0012345600000785",
+              currency: "EUR",
+            },
+          ],
+        });
+      }
+      if (url.includes("/ux/payments-feed/")) {
+        feedPage += 1;
+        return jsonResponse({
+          results: [
+            {
+              ...payment(
+                feedPage === 1
+                  ? "33333333-3333-4333-8333-333333333333"
+                  : "44444444-4444-4444-8444-444444444444",
+                "2026-08-02T10:15:00Z",
+              ),
+              matches: [{ match_type: "direct", uuid: debtUuid }],
+            },
+          ],
+          pagination:
+            feedPage === 1
+              ? { has_more: true, next_cursor: "cursor-2" }
+              : { has_more: false },
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    await expect(api.transactionDetails(auth, debtUuid)).rejects.toThrow(
+      "ambiguous payment match",
+    );
+    expect(feedPage).toBe(2);
   });
 
   test("rejects transaction preview from another payment account", async () => {

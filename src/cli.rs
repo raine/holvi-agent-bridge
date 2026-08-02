@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail, ensure};
 use chrono::NaiveDate;
 use clap::{Args, CommandFactory, Parser, Subcommand};
+use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -591,6 +592,33 @@ fn parse_comment_content(value: &str) -> std::result::Result<String, String> {
     Ok(value.to_owned())
 }
 
+fn decode_group_segment(value: &str) -> Result<String> {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            ensure!(
+                bytes
+                    .get(index + 1..index + 3)
+                    .is_some_and(|digits| digits.iter().all(u8::is_ascii_hexdigit)),
+                "Holvi payment-page URL contains malformed percent encoding."
+            );
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    let decoded = percent_decode_str(value)
+        .decode_utf8()
+        .map_err(|_| anyhow::anyhow!("Holvi payment-page URL group is not valid UTF-8."))?
+        .into_owned();
+    ensure!(
+        !decoded.contains(['/', '\\']),
+        "Holvi payment-page URL group contains an encoded path separator."
+    );
+    Ok(decoded)
+}
+
 fn parse_debt_target(value: &str, configured_group: &str) -> Result<String> {
     if validate_uuid(value, "Debt").is_ok() {
         return Ok(value.to_owned());
@@ -615,10 +643,14 @@ fn parse_debt_target(value: &str, configured_group: &str) -> Result<String> {
     ensure!(
         segments.len() == 5
             && segments[0] == "group"
-            && segments[1] == configured_group
             && segments[2] == "payment"
             && segments[4].is_empty(),
         "Holvi payment-page URL must target the configured group and one payment debt."
+    );
+    let group = decode_group_segment(segments[1])?;
+    ensure!(
+        group == configured_group,
+        "Holvi payment-page URL must target the configured group."
     );
     let debt_uuid = segments[3];
     validate_uuid(debt_uuid, "Debt")?;
@@ -1281,6 +1313,16 @@ mod tests {
             .unwrap(),
             debt_uuid,
         );
+        assert_eq!(
+            parse_debt_target(
+                &format!(
+                    "{ACCOUNT_ORIGIN}/group/AbC123+M%C3%BCnchen%20Office/payment/{debt_uuid}/"
+                ),
+                "AbC123+München Office",
+            )
+            .unwrap(),
+            debt_uuid,
+        );
     }
 
     #[test]
@@ -1295,6 +1337,10 @@ mod tests {
             format!("{ACCOUNT_ORIGIN}/group/{group}/payment/{debt_uuid}/extra/"),
             format!("{ACCOUNT_ORIGIN}/group/{group}/payment/{debt_uuid}/?uuid={debt_uuid}"),
             format!("{ACCOUNT_ORIGIN}/group/{group}/payment/{debt_uuid}/#details"),
+            format!("{ACCOUNT_ORIGIN}/group/AbC123+example%2Fcompany/payment/{debt_uuid}/"),
+            format!("{ACCOUNT_ORIGIN}/group/AbC123+example%5Ccompany/payment/{debt_uuid}/"),
+            format!("{ACCOUNT_ORIGIN}/group/AbC123+example%ZZcompany/payment/{debt_uuid}/"),
+            format!("{ACCOUNT_ORIGIN}/group/AbC123+example%FFcompany/payment/{debt_uuid}/"),
         ];
         for value in invalid {
             assert!(
