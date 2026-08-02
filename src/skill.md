@@ -83,6 +83,9 @@ holvi audit list --limit 25
   as unavailable instead of deriving them.
 - `--from` and `--to` are inclusive `YYYY-MM-DD` calendar dates. With no dates,
   `transactions list` returns all records available within bridge limits.
+- Transaction `direction` preserves a nonempty Holvi value. An absent or empty
+  value is `"out"` for a negative amount, `"in"` for a positive amount, and empty
+  for zero.
 - Bookkeeping detail keeps decimal values as strings and separates `unitPrice`
   from `lineTotal`. Do not perform money calculations with binary floating
   point.

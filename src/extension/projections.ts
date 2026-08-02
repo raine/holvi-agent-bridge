@@ -17,6 +17,7 @@ export const maxCommentContentBytes = 16 * 1024;
 const maxProjectionBytes = 512 * 1024;
 
 type JsonRecord = Record<string, unknown>;
+type Decimal = string | number | null;
 
 function record(value: unknown, label: string): JsonRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -58,7 +59,7 @@ function optionalUuid(value: unknown, label: string): string | null {
   return uuid(value, label);
 }
 
-function decimal(value: unknown, label: string): string | number | null {
+function decimal(value: unknown, label: string): Decimal {
   if (value === null || value === undefined || value === "") {
     return null;
   }
@@ -81,6 +82,20 @@ function requiredDecimal(value: unknown, label: string): string | number {
     throw new Error(`${label} is required.`);
   }
   return result;
+}
+
+function paymentDirection(value: unknown, amount: Decimal): string {
+  const sourceDirection = optionalString(value, "Payment direction");
+  if (sourceDirection) {
+    return sourceDirection;
+  }
+  if (typeof amount === "number") {
+    return amount < 0 ? "out" : amount > 0 ? "in" : "";
+  }
+  if (typeof amount === "string" && /[1-9]/.test(amount)) {
+    return amount.startsWith("-") ? "out" : "in";
+  }
+  return "";
 }
 
 function price(
@@ -192,6 +207,7 @@ function payment(value: unknown): JsonRecord {
     "Payment foreign exchange metadata",
   );
   const paymentTimestamp = timestamp(source.ux_timestamp, "Payment timestamp");
+  const amount = decimal(source.amount ?? source.value, "Payment amount");
   const rawAttachmentCount = source.attachment_count ?? 0;
   return {
     paymentUuid: uuid(source.uuid, "Payment UUID"),
@@ -203,8 +219,8 @@ function payment(value: unknown): JsonRecord {
       optionalString(source.counterparty_name, "Payment counterparty name") ??
       stringOrEmpty(source.description, "Payment description"),
     description: stringOrEmpty(source.description, "Payment description"),
-    direction: stringOrEmpty(source.direction, "Payment direction"),
-    amount: decimal(source.amount ?? source.value, "Payment amount"),
+    direction: paymentDirection(source.direction, amount),
+    amount,
     currency: optionalString(source.currency, "Payment currency") ?? "EUR",
     originalAmount: decimal(
       fx.counterparty_amount ?? fx.counterparty_value,

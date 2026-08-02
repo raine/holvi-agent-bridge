@@ -68,6 +68,19 @@
     }
     return result;
   }
+  function paymentDirection(value, amount) {
+    const sourceDirection = optionalString(value, "Payment direction");
+    if (sourceDirection) {
+      return sourceDirection;
+    }
+    if (typeof amount === "number") {
+      return amount < 0 ? "out" : amount > 0 ? "in" : "";
+    }
+    if (typeof amount === "string" && /[1-9]/.test(amount)) {
+      return amount.startsWith("-") ? "out" : "in";
+    }
+    return "";
+  }
   function price(value, label, includeVatRate) {
     if (value === null || value === undefined) {
       return null;
@@ -141,6 +154,7 @@
     const counterparty = optionalRecord(source.counterparty, "Payment counterparty");
     const fx = optionalRecord(source.fx_meta, "Payment foreign exchange metadata");
     const paymentTimestamp = timestamp(source.ux_timestamp, "Payment timestamp");
+    const amount = decimal(source.amount ?? source.value, "Payment amount");
     const rawAttachmentCount = source.attachment_count ?? 0;
     return {
       paymentUuid: uuid(source.uuid, "Payment UUID"),
@@ -149,8 +163,8 @@
       timestamp: paymentTimestamp,
       counterparty: optionalString(counterparty.display_name, "Payment counterparty name") ?? optionalString(source.counterparty_name, "Payment counterparty name") ?? stringOrEmpty(source.description, "Payment description"),
       description: stringOrEmpty(source.description, "Payment description"),
-      direction: stringOrEmpty(source.direction, "Payment direction"),
-      amount: decimal(source.amount ?? source.value, "Payment amount"),
+      direction: paymentDirection(source.direction, amount),
+      amount,
       currency: optionalString(source.currency, "Payment currency") ?? "EUR",
       originalAmount: decimal(fx.counterparty_amount ?? fx.counterparty_value, "Payment original amount"),
       originalCurrency: optionalString(fx.counterparty_currency, "Payment original currency"),

@@ -518,7 +518,10 @@ holvi transactions list \
 
 `--from` must be on or before `--to`. With no dates, the command lists every
 transaction available within the configured page and result limits. JSON keeps
-`paymentUuid` and the direct-match `debtUuid` separate.
+`paymentUuid` and the direct-match `debtUuid` separate. A nonempty Holvi
+`direction` is preserved. When it is absent or empty, the projection derives
+`"out"` from a negative amount and `"in"` from a positive amount. Zero keeps an
+empty direction because its direction is ambiguous.
 
 ### `holvi transactions comments`
 

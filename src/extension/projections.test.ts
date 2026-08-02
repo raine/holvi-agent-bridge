@@ -155,6 +155,45 @@ describe("transaction projections", () => {
     });
   });
 
+  test("infers incoming direction from a positive decimal string", () => {
+    const incoming = payment();
+    delete (incoming as { direction?: string }).direction;
+
+    const page = projectTransactionFeedPage({
+      results: [incoming],
+      pagination: { has_more: false },
+    });
+
+    expect(page.results[0]?.direction).toBe("in");
+  });
+
+  test("infers outgoing direction from a negative numeric decimal", () => {
+    const page = projectTransactionFeedPage({
+      results: [{ ...payment(), direction: "", amount: -24.8 }],
+      pagination: { has_more: false },
+    });
+
+    expect(page.results[0]?.direction).toBe("out");
+  });
+
+  test("leaves direction empty for a zero amount", () => {
+    const page = projectTransactionFeedPage({
+      results: [{ ...payment(), direction: null, amount: "-0.00" }],
+      pagination: { has_more: false },
+    });
+
+    expect(page.results[0]?.direction).toBe("");
+  });
+
+  test("preserves a nonempty source direction", () => {
+    const page = projectTransactionFeedPage({
+      results: [{ ...payment(), direction: "in", amount: "-24.80" }],
+      pagination: { has_more: false },
+    });
+
+    expect(page.results[0]?.direction).toBe("in");
+  });
+
   test("rejects malformed money, timestamps, counts, and pagination", () => {
     const malformed = payment();
     malformed.amount = "twenty";
