@@ -436,11 +436,11 @@
   var minimumFileBytes = 1;
   var actionCapabilities = {
     doctor: [],
-    transactions: ["transactions.read"],
-    preview: ["transactions.read"],
+    "transactions.list": ["transactions.read"],
+    "debts.get": ["transactions.read"],
     "comments.list": ["transactions.read"],
     "comments.create": ["transactions.read", "comments.write"],
-    upload: ["transactions.read", "attachments.write"],
+    "attachments.upload": ["transactions.read", "attachments.write"],
     "attachments.delete": ["transactions.read", "attachments.delete"],
     "bookkeeping.get": ["bookkeeping.read"],
     "bookkeeping.categories": ["bookkeeping.read"],
@@ -1127,8 +1127,8 @@
       this.comments = new CommentWorkflow(session, api);
       this.handlers = {
         doctor: (auth) => this.doctor(auth),
-        transactions: (auth, params) => this.api.listTransactions(auth, params),
-        preview: (auth, params) => this.api.previewDebt(auth, asString2(params.debtUuid)),
+        "transactions.list": (auth, params) => this.api.listTransactions(auth, params),
+        "debts.get": (auth, params) => this.api.previewDebt(auth, asString2(params.debtUuid)),
         "comments.list": (auth, params) => this.api.listComments(auth, asString2(params.debtUuid)),
         "comments.create": (auth, params) => this.comments.createComment(auth, params),
         "attachments.delete": (auth, params) => this.attachmentDeletion.deleteAttachment(auth, params),
@@ -1154,7 +1154,7 @@
         throw new Error("The local helper requested an unsupported action.");
       }
       this.session.requireCapabilities(...requirements);
-      if (action === "upload") {
+      if (action === "attachments.upload") {
         throw new Error("Receipt uploads require transfer messages.");
       }
       const auth = await this.requestAuth();
@@ -1178,7 +1178,7 @@
         const page = await this.api.transactionFeedPage(auth);
         return {
           ...base,
-          probeAction: "transactions",
+          probeAction: "transactions.list",
           firstPageResults: page.results.length
         };
       }

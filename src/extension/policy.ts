@@ -2,11 +2,11 @@ export const minimumFileBytes = 1;
 
 export const actionCapabilities = {
   doctor: [],
-  transactions: ["transactions.read"],
-  preview: ["transactions.read"],
+  "transactions.list": ["transactions.read"],
+  "debts.get": ["transactions.read"],
   "comments.list": ["transactions.read"],
   "comments.create": ["transactions.read", "comments.write"],
-  upload: ["transactions.read", "attachments.write"],
+  "attachments.upload": ["transactions.read", "attachments.write"],
   "attachments.delete": ["transactions.read", "attachments.delete"],
   "bookkeeping.get": ["bookkeeping.read"],
   "bookkeeping.categories": ["bookkeeping.read"],
@@ -16,12 +16,12 @@ export const actionCapabilities = {
 } as const satisfies Record<string, readonly string[]>;
 
 export type BridgeAction = keyof typeof actionCapabilities;
-export type CommandAction = Exclude<BridgeAction, "upload">;
+export type CommandAction = Exclude<BridgeAction, "attachments.upload">;
 
 export const commandActions = {
   doctor: true,
-  transactions: true,
-  preview: true,
+  "transactions.list": true,
+  "debts.get": true,
   "comments.list": true,
   "comments.create": true,
   "attachments.delete": true,

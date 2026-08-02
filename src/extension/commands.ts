@@ -52,8 +52,9 @@ export class CommandService {
     this.comments = new CommentWorkflow(session, api);
     this.handlers = {
       doctor: (auth) => this.doctor(auth),
-      transactions: (auth, params) => this.api.listTransactions(auth, params),
-      preview: (auth, params) =>
+      "transactions.list": (auth, params) =>
+        this.api.listTransactions(auth, params),
+      "debts.get": (auth, params) =>
         this.api.previewDebt(auth, asString(params.debtUuid)),
       "comments.list": (auth, params) =>
         this.api.listComments(auth, asString(params.debtUuid)),
@@ -87,7 +88,7 @@ export class CommandService {
       throw new Error("The local helper requested an unsupported action.");
     }
     this.session.requireCapabilities(...requirements);
-    if (action === "upload") {
+    if (action === "attachments.upload") {
       throw new Error("Receipt uploads require transfer messages.");
     }
     const auth = await this.requestAuth();
@@ -112,7 +113,7 @@ export class CommandService {
       const page = await this.api.transactionFeedPage(auth);
       return {
         ...base,
-        probeAction: "transactions",
+        probeAction: "transactions.list",
         firstPageResults: page.results.length,
       };
     }

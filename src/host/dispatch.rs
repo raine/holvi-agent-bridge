@@ -44,7 +44,9 @@ pub async fn send(
 ) -> Result<()> {
     match &request.action {
         Action::HostRestart(_) => bail!("Host restart must be handled by the runtime."),
-        Action::Upload(params) => receipt::transfer(&request.id, params, &config, &native).await,
+        Action::AttachmentUpload(params) => {
+            receipt::transfer(&request.id, params, &config, &native).await
+        }
         action => native
             .send(json!({
                 "type": COMMAND_MESSAGE,
@@ -185,7 +187,7 @@ mod tests {
     #[test]
     fn upload_dispatch_requires_both_capabilities() {
         let config = test_config(vec!["transactions.read".into()]);
-        let request = test_request(Action::Upload(UploadParams {
+        let request = test_request(Action::AttachmentUpload(UploadParams {
             debt_uuid: "11111111-1111-4111-8111-111111111111".into(),
             file_path: PathBuf::from("/tmp/receipt.pdf"),
             confirmed: true,

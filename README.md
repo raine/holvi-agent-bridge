@@ -186,13 +186,13 @@ holvi capabilities
 List all transactions in a date range:
 
 ```sh
-holvi transactions --from 2026-07-01 --to 2026-07-31 --json
+holvi transactions list --from 2026-07-01 --to 2026-07-31 --json
 ```
 
 Add `--missing-attachments` to return only transactions without an attachment:
 
 ```sh
-holvi transactions --from 2026-07-01 --to 2026-07-31 \
+holvi transactions list --from 2026-07-01 --to 2026-07-31 \
   --missing-attachments --json
 ```
 
@@ -202,7 +202,7 @@ payments can have `null` until Holvi creates the debt record used for
 attachments.
 
 ```sh
-holvi preview \
+holvi transactions get \
   --debt '11111111-1111-4111-8111-111111111111'
 ```
 
@@ -235,7 +235,7 @@ Before uploading, run the command without `--yes`. It checks the transaction and
 local file without changing Holvi:
 
 ```sh
-holvi upload \
+holvi attachments upload \
   --debt '11111111-1111-4111-8111-111111111111' \
   --file '/absolute/path/to/receipts/example.pdf'
 ```
@@ -243,7 +243,7 @@ holvi upload \
 Check the preview, then upload the file:
 
 ```sh
-holvi upload \
+holvi attachments upload \
   --debt '11111111-1111-4111-8111-111111111111' \
   --file '/absolute/path/to/receipts/example.pdf' \
   --yes
@@ -347,13 +347,14 @@ that the command does not use.
 | [`config path`](#holvi-config-path)                          | none                                                       | Print the private config path                      |
 | [`capabilities`](#holvi-capabilities)                       | none                                                       | Show enabled capabilities and operations          |
 | [`doctor`](#holvi-doctor)                                   | any configured capability                                  | Verify the Chrome connection and an API surface   |
-| [`transactions`](#holvi-transactions)                       | `transactions.read`                                        | List payment-account transactions                 |
+| [`transactions`](#holvi-transactions)                       | `transactions.read`, optionally `comments.write`            | List transactions or manage comments              |
+| [`transactions list`](#holvi-transactions-list)             | `transactions.read`                                        | List payment-account transactions                 |
+| [`transactions get`](#holvi-transactions-get)               | `transactions.read`                                        | Inspect one transaction's accounting record       |
 | [`transactions comments`](#holvi-transactions-comments)     | `transactions.read`                                        | Read internal transaction comments                |
 | `transactions comments create`                              | `transactions.read`, `comments.write`                      | Dry-run or create one internal comment            |
-| [`preview`](#holvi-preview)                                 | `transactions.read`                                        | Inspect one accounting debt                       |
-| [`upload`](#holvi-upload)                                   | `transactions.read`, plus `attachments.write` with `--yes`  | Validate or upload one receipt                    |
-| [`attachments`](#holvi-attachments)                         | `transactions.read`, `attachments.delete`                   | Inspect or delete debt attachments                |
-| [`attachments delete`](#holvi-attachments-delete)           | `transactions.read`, `attachments.delete`                   | Preview or delete one selected attachment         |
+| [`attachments`](#holvi-attachments)                         | `transactions.read`, plus a write or delete capability     | Upload or delete debt attachments                 |
+| [`attachments upload`](#holvi-attachments-upload)           | `transactions.read`, plus `attachments.write` with `--yes` | Validate or upload one receipt                    |
+| [`attachments delete`](#holvi-attachments-delete)           | `transactions.read`, `attachments.delete`                  | Preview or delete one selected attachment         |
 | [`bookkeeping`](#holvi-bookkeeping)                         | `bookkeeping.read` or `bookkeeping.write`                   | Access scoped bookkeeping operations              |
 | [`bookkeeping get`](#holvi-bookkeeping-get)                 | `bookkeeping.read`                                         | Inspect bookkeeping details and active line items |
 | [`bookkeeping categories`](#holvi-bookkeeping-categories)   | `bookkeeping.read`                                         | List bookkeeping categories                       |
@@ -487,11 +488,19 @@ metadata.
 
 ### `holvi transactions`
 
+Groups transaction listing and comment commands.
+
+```sh
+holvi transactions <COMMAND>
+```
+
+### `holvi transactions list`
+
 Lists payment-feed records from the configured payment account. The bridge reads
 API pages up to the configured limits and applies date filtering locally.
 
 ```sh
-holvi transactions \
+holvi transactions list \
   [--from YYYY-MM-DD] \
   [--to YYYY-MM-DD] \
   [--missing-attachments] \
@@ -536,13 +545,13 @@ Comment content must contain non-whitespace text and fit within 16 KiB of UTF-8.
 Listings use Holvi's 25-record page size and stop at 40 pages, 1,000 results, a
 1 MiB API response, or a 512 KiB projected response.
 
-### `holvi preview`
+### `holvi transactions get`
 
-Reads one debt record directly from Holvi and prints the compact view used by
-the receipt workflow.
+Reads the accounting record linked to one transaction and prints the compact view
+used by attachment commands.
 
 ```sh
-holvi preview --debt UUID
+holvi transactions get --debt UUID
 ```
 
 The result includes the debt UUID, object code, counterparty, amount, currency,
@@ -550,12 +559,20 @@ attachment count, bounded attachment metadata, and bookkeeping status. Each
 attachment includes only `attachmentCode`, `title`, and `format`. `--debt` must
 be a UUID.
 
-### `holvi upload`
+### `holvi attachments`
 
-Validates a receipt path and either prints a dry-run or uploads the file.
+Groups commands that upload or delete attachments on one selected debt.
 
 ```sh
-holvi upload --debt UUID --file /absolute/path/to/receipt.pdf [--yes]
+holvi attachments <COMMAND>
+```
+
+### `holvi attachments upload`
+
+Validates a receipt path and either prints a dry run or uploads the file.
+
+```sh
+holvi attachments upload --debt UUID --file /absolute/path/to/receipt.pdf [--yes]
 ```
 
 | Option        | Required | Description                                   |
@@ -571,14 +588,6 @@ that the resulting attachment count is exactly one.
 
 Accepted files are nonempty PDF, PNG, JPEG, or GIF files within the configured
 size limit. Canonical path checks reject relative paths and symlink escapes.
-
-### `holvi attachments`
-
-Groups the operations that inspect or delete attachments on one selected debt.
-
-```sh
-holvi attachments <COMMAND>
-```
 
 ### `holvi attachments delete`
 

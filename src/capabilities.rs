@@ -4,11 +4,14 @@ use crate::protocol::Action;
 
 pub const ACTION_CAPABILITIES: [(&str, &[&str]); 12] = [
     ("doctor", &[]),
-    ("transactions", &["transactions.read"]),
-    ("preview", &["transactions.read"]),
+    ("transactions.list", &["transactions.read"]),
+    ("debts.get", &["transactions.read"]),
     ("comments.list", &["transactions.read"]),
     ("comments.create", &["transactions.read", "comments.write"]),
-    ("upload", &["transactions.read", "attachments.write"]),
+    (
+        "attachments.upload",
+        &["transactions.read", "attachments.write"],
+    ),
     (
         "attachments.delete",
         &["transactions.read", "attachments.delete"],
@@ -23,11 +26,11 @@ pub const ACTION_CAPABILITIES: [(&str, &[&str]); 12] = [
 pub fn required_capabilities(action: &Action) -> &'static [&'static str] {
     match action {
         Action::HostRestart(_) | Action::Doctor(_) => &[],
-        Action::Transactions(_) | Action::Preview(_) | Action::CommentsList(_) => {
+        Action::TransactionsList(_) | Action::DebtGet(_) | Action::CommentsList(_) => {
             &["transactions.read"]
         }
         Action::CommentsCreate(_) => &["transactions.read", "comments.write"],
-        Action::Upload(_) => &["transactions.read", "attachments.write"],
+        Action::AttachmentUpload(_) => &["transactions.read", "attachments.write"],
         Action::AttachmentDelete(_) => &["transactions.read", "attachments.delete"],
         Action::BookkeepingGet(_)
         | Action::BookkeepingCategories(_)
@@ -123,12 +126,12 @@ mod tests {
     fn typed_actions_match_the_capability_policy() {
         let actions = [
             Action::Doctor(EmptyParams {}),
-            Action::Transactions(TransactionParams {
+            Action::TransactionsList(TransactionParams {
                 from: String::new(),
                 to: String::new(),
                 missing_attachments: false,
             }),
-            Action::Preview(DebtParams {
+            Action::DebtGet(DebtParams {
                 debt_uuid: String::new(),
             }),
             Action::CommentsList(DebtParams {
@@ -139,7 +142,7 @@ mod tests {
                 content: String::new(),
                 confirmed: true,
             }),
-            Action::Upload(UploadParams {
+            Action::AttachmentUpload(UploadParams {
                 debt_uuid: String::new(),
                 file_path: PathBuf::new(),
                 confirmed: true,
@@ -175,9 +178,9 @@ mod tests {
     fn read_only_scope_disables_other_capabilities() {
         let enabled = enabled_actions(&["transactions.read".into()]);
         assert_eq!(enabled.get("doctor"), Some(true));
-        assert_eq!(enabled.get("transactions"), Some(true));
-        assert_eq!(enabled.get("preview"), Some(true));
-        assert_eq!(enabled.get("upload"), Some(false));
+        assert_eq!(enabled.get("transactions.list"), Some(true));
+        assert_eq!(enabled.get("debts.get"), Some(true));
+        assert_eq!(enabled.get("attachments.upload"), Some(false));
         assert_eq!(enabled.get("bookkeeping.get"), Some(false));
         assert_eq!(enabled.get("audit.list"), Some(false));
     }
@@ -213,20 +216,20 @@ mod tests {
 
         let enabled = enabled_actions(&["transactions.read".into(), "attachments.delete".into()]);
         assert_eq!(enabled.get("attachments.delete"), Some(true));
-        assert_eq!(enabled.get("upload"), Some(false));
+        assert_eq!(enabled.get("attachments.upload"), Some(false));
     }
 
     #[test]
     fn upload_requires_both_capabilities() {
         let enabled = enabled_actions(&["transactions.read".into(), "attachments.write".into()]);
-        assert_eq!(enabled.get("upload"), Some(true));
+        assert_eq!(enabled.get("attachments.upload"), Some(true));
     }
 
     #[test]
     fn serialization_preserves_existing_operation_order() {
         let value = serde_json::to_string(&enabled_actions(&[])).unwrap();
         assert!(value.starts_with(
-            r#"{"doctor":true,"transactions":false,"preview":false,"comments.list":false,"#
+            r#"{"doctor":true,"transactions.list":false,"debts.get":false,"comments.list":false,"#
         ));
     }
 }

@@ -62,13 +62,9 @@ enum Command {
     Capabilities(OutputArgs),
     /// Verify the Chrome connection and an API surface
     Doctor(OutputArgs),
-    /// List transactions or manage their internal comments
+    /// List transactions or inspect their details and comments
     Transactions(TransactionsArgs),
-    /// Inspect one accounting debt
-    Preview(PreviewArgs),
-    /// Validate or upload one receipt
-    Upload(UploadArgs),
-    /// Inspect or delete debt attachments
+    /// Upload or delete debt attachments
     Attachments {
         #[command(subcommand)]
         command: AttachmentsCommand,
@@ -95,6 +91,8 @@ enum ConfigCommand {
 
 #[derive(Subcommand)]
 enum AttachmentsCommand {
+    /// Validate or upload one receipt
+    Upload(UploadArgs),
     /// Preview or delete one attachment from one debt
     Delete(AttachmentDeleteArgs),
 }
@@ -102,11 +100,11 @@ enum AttachmentsCommand {
 #[derive(Subcommand)]
 enum BookkeepingCommand {
     /// Inspect bookkeeping details and active line items
-    Get(PreviewArgs),
+    Get(DebtArgs),
     /// List bookkeeping categories
     Categories,
     /// List suggested category codes for one debt
-    Suggestions(PreviewArgs),
+    Suggestions(DebtArgs),
     /// Replace one bookkeeping line-item description
     SetDescription(BookkeepingDescriptionArgs),
 }
@@ -168,13 +166,15 @@ struct InstallArgs {
 #[derive(Args)]
 struct TransactionsArgs {
     #[command(subcommand)]
-    command: Option<TransactionCommand>,
-    #[command(flatten)]
-    listing: TransactionArgs,
+    command: TransactionCommand,
 }
 
 #[derive(Subcommand)]
 enum TransactionCommand {
+    /// List payment-account transactions
+    List(TransactionArgs),
+    /// Inspect one transaction's accounting record
+    Get(DebtArgs),
     /// Read or create internal transaction comments
     Comments {
         #[command(subcommand)]
@@ -185,7 +185,7 @@ enum TransactionCommand {
 #[derive(Subcommand)]
 enum CommentCommand {
     /// List internal comments for one transaction debt
-    List(PreviewArgs),
+    List(DebtArgs),
     /// Create an internal comment after an authoritative preflight
     Create(CommentCreateArgs),
 }
@@ -213,7 +213,7 @@ struct TransactionArgs {
 }
 
 #[derive(Args)]
-struct PreviewArgs {
+struct DebtArgs {
     #[arg(long)]
     debt: String,
 }
@@ -356,29 +356,41 @@ pub async fn run() -> Result<()> {
             }
         }
         Command::Transactions(args) => match args.command {
-            None => {
-                let from = args.listing.from.unwrap_or_default();
-                let to = args.listing.to.unwrap_or_default();
+            TransactionCommand::List(args) => {
+                let from = args.from.unwrap_or_default();
+                let to = args.to.unwrap_or_default();
                 ensure!(
                     from.is_empty() || to.is_empty() || from <= to,
                     "--from must be on or before --to."
                 );
                 let result = request_host(
                     &config.hmac_secret,
-                    Action::Transactions(TransactionParams {
+                    Action::TransactionsList(TransactionParams {
                         from,
                         to,
-                        missing_attachments: args.listing.missing_attachments,
+                        missing_attachments: args.missing_attachments,
                     }),
                 )
                 .await?;
-                if args.listing.json_output {
+                if args.json_output {
                     print_json(&result)?;
                 } else {
                     print_transactions(serde_json::from_value(result)?)
                 }
             }
-            Some(TransactionCommand::Comments { command }) => match command {
+            TransactionCommand::Get(args) => {
+                validate_uuid(&args.debt, "Debt")?;
+                print_json(
+                    &request_host(
+                        &config.hmac_secret,
+                        Action::DebtGet(DebtParams {
+                            debt_uuid: args.debt,
+                        }),
+                    )
+                    .await?,
+                )?;
+            }
+            TransactionCommand::Comments { command } => match command {
                 CommentCommand::List(args) => {
                     validate_uuid(&args.debt, "Debt")?;
                     print_json(
@@ -408,7 +420,7 @@ pub async fn run() -> Result<()> {
                     } else {
                         let preview = request_host(
                             &config.hmac_secret,
-                            Action::Preview(DebtParams {
+                            Action::DebtGet(DebtParams {
                                 debt_uuid: args.debt,
                             }),
                         )
@@ -418,51 +430,39 @@ pub async fn run() -> Result<()> {
                 }
             },
         },
-        Command::Preview(args) => {
-            validate_uuid(&args.debt, "Debt")?;
-            print_json(
-                &request_host(
-                    &config.hmac_secret,
-                    Action::Preview(DebtParams {
-                        debt_uuid: args.debt,
-                    }),
-                )
-                .await?,
-            )?;
-        }
-        Command::Upload(args) => {
-            validate_uuid(&args.debt, "Debt")?;
-            let receipt =
-                resolve_receipt_file(&config.receipt_roots, config.max_file_bytes, &args.file)?;
-            if args.yes {
-                print_json(
-                    &request_host(
+        Command::Attachments { command } => match command {
+            AttachmentsCommand::Upload(args) => {
+                validate_uuid(&args.debt, "Debt")?;
+                let receipt =
+                    resolve_receipt_file(&config.receipt_roots, config.max_file_bytes, &args.file)?;
+                if args.yes {
+                    print_json(
+                        &request_host(
+                            &config.hmac_secret,
+                            Action::AttachmentUpload(UploadParams {
+                                debt_uuid: args.debt,
+                                file_path: receipt.path,
+                                confirmed: true,
+                            }),
+                        )
+                        .await?,
+                    )?;
+                } else {
+                    let debt = request_host(
                         &config.hmac_secret,
-                        Action::Upload(UploadParams {
+                        Action::DebtGet(DebtParams {
                             debt_uuid: args.debt,
-                            file_path: receipt.path,
-                            confirmed: true,
                         }),
                     )
-                    .await?,
-                )?;
-            } else {
-                let preview = request_host(
-                    &config.hmac_secret,
-                    Action::Preview(DebtParams {
-                        debt_uuid: args.debt,
-                    }),
-                )
-                .await?;
-                print_json(&json!({
-                    "dryRun": true,
-                    "transaction": preview,
-                    "receipt": receipt,
-                    "next": "Repeat the upload command with --yes after checking these values.",
-                }))?;
+                    .await?;
+                    print_json(&json!({
+                        "dryRun": true,
+                        "transaction": debt,
+                        "receipt": receipt,
+                        "next": "Repeat the attachment upload command with --yes after checking these values.",
+                    }))?;
+                }
             }
-        }
-        Command::Attachments { command } => match command {
             AttachmentsCommand::Delete(args) => {
                 validate_uuid(&args.debt, "Debt")?;
                 validate_attachment_code(&args.attachment)?;
@@ -1054,7 +1054,7 @@ fn format_doctor(doctor: DoctorResult, renderer: ReportRenderer) -> String {
     renderer.write_section(&mut output, "Capabilities", &capability_rows);
 
     let probe_row = match doctor.probe_action.as_deref() {
-        Some("transactions") => ReportRow::new(
+        Some("transactions.list") => ReportRow::new(
             ReportStatus::Ok,
             "transactions",
             format!(
@@ -1310,6 +1310,53 @@ mod tests {
             })
         ));
 
+        let transactions =
+            Cli::try_parse_from(["holvi", "transactions", "list", "--json"]).unwrap();
+        assert!(matches!(
+            transactions.command,
+            Some(Command::Transactions(TransactionsArgs {
+                command: TransactionCommand::List(TransactionArgs {
+                    json_output: true,
+                    ..
+                })
+            }))
+        ));
+
+        let transaction = Cli::try_parse_from([
+            "holvi",
+            "transactions",
+            "get",
+            "--debt",
+            "11111111-1111-4111-8111-111111111111",
+        ])
+        .unwrap();
+        assert!(matches!(
+            transaction.command,
+            Some(Command::Transactions(TransactionsArgs {
+                command: TransactionCommand::Get(_)
+            }))
+        ));
+
+        let upload = Cli::try_parse_from([
+            "holvi",
+            "attachments",
+            "upload",
+            "--debt",
+            "11111111-1111-4111-8111-111111111111",
+            "--file",
+            "/tmp/receipt.pdf",
+        ])
+        .unwrap();
+        assert!(matches!(
+            upload.command,
+            Some(Command::Attachments {
+                command: AttachmentsCommand::Upload(_)
+            })
+        ));
+        assert!(Cli::try_parse_from(["holvi", "preview"]).is_err());
+        assert!(Cli::try_parse_from(["holvi", "upload"]).is_err());
+        assert!(Cli::try_parse_from(["holvi", "debts"]).is_err());
+
         let description = Cli::try_parse_from([
             "holvi",
             "bookkeeping",
@@ -1371,10 +1418,9 @@ mod tests {
         assert!(matches!(
             list.command,
             Some(Command::Transactions(TransactionsArgs {
-                command: Some(TransactionCommand::Comments {
+                command: TransactionCommand::Comments {
                     command: CommentCommand::List(_)
-                }),
-                ..
+                },
             }))
         ));
 
@@ -1393,10 +1439,9 @@ mod tests {
         assert!(matches!(
             create.command,
             Some(Command::Transactions(TransactionsArgs {
-                command: Some(TransactionCommand::Comments {
+                command: TransactionCommand::Comments {
                     command: CommentCommand::Create(CommentCreateArgs { yes: true, .. })
-                }),
-                ..
+                },
             }))
         ));
         assert!(
@@ -1514,7 +1559,7 @@ mod tests {
             protocol_version: Some(NATIVE_PROTOCOL_VERSION),
             host_version: Some(HOST_BUILD_VERSION.into()),
             extension_version: Some(HOST_BUILD_VERSION.into()),
-            probe_action: Some("transactions".into()),
+            probe_action: Some("transactions.list".into()),
             first_page_results: Some(3),
             category_count: None,
             recent_activity_count: None,
@@ -1550,7 +1595,7 @@ mod tests {
                 protocol_version: Some(NATIVE_PROTOCOL_VERSION),
                 host_version: Some(HOST_BUILD_VERSION.into()),
                 extension_version: Some(HOST_BUILD_VERSION.into()),
-                probe_action: Some("transactions".into()),
+                probe_action: Some("transactions.list".into()),
                 first_page_results: Some(3),
                 category_count: None,
                 recent_activity_count: None,

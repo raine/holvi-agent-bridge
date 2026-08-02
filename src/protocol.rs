@@ -157,11 +157,11 @@ pub struct AuditListParams {
 pub enum Action {
     HostRestart(EmptyParams),
     Doctor(EmptyParams),
-    Transactions(TransactionParams),
-    Preview(DebtParams),
+    TransactionsList(TransactionParams),
+    DebtGet(DebtParams),
     CommentsList(DebtParams),
     CommentsCreate(CommentCreateParams),
-    Upload(UploadParams),
+    AttachmentUpload(UploadParams),
     AttachmentDelete(AttachmentDeleteParams),
     BookkeepingGet(DebtParams),
     BookkeepingCategories(EmptyParams),
@@ -175,11 +175,11 @@ impl Action {
         match self {
             Self::HostRestart(_) => "host.restart",
             Self::Doctor(_) => "doctor",
-            Self::Transactions(_) => "transactions",
-            Self::Preview(_) => "preview",
+            Self::TransactionsList(_) => "transactions.list",
+            Self::DebtGet(_) => "debts.get",
             Self::CommentsList(_) => "comments.list",
             Self::CommentsCreate(_) => "comments.create",
-            Self::Upload(_) => "upload",
+            Self::AttachmentUpload(_) => "attachments.upload",
             Self::AttachmentDelete(_) => "attachments.delete",
             Self::BookkeepingGet(_) => "bookkeeping.get",
             Self::BookkeepingCategories(_) => "bookkeeping.categories",
@@ -194,13 +194,13 @@ impl Action {
             Self::HostRestart(params)
             | Self::Doctor(params)
             | Self::BookkeepingCategories(params) => serde_json::to_value(params),
-            Self::Transactions(params) => serde_json::to_value(params),
-            Self::Preview(params)
+            Self::TransactionsList(params) => serde_json::to_value(params),
+            Self::DebtGet(params)
             | Self::CommentsList(params)
             | Self::BookkeepingGet(params)
             | Self::BookkeepingSuggestions(params) => serde_json::to_value(params),
             Self::CommentsCreate(params) => serde_json::to_value(params),
-            Self::Upload(params) => serde_json::to_value(params),
+            Self::AttachmentUpload(params) => serde_json::to_value(params),
             Self::AttachmentDelete(params) => serde_json::to_value(params),
             Self::BookkeepingSetDescription(params) => serde_json::to_value(params),
             Self::AuditList(params) => serde_json::to_value(params),
@@ -217,7 +217,7 @@ impl Action {
         let action = match name {
             "host.restart" => Self::HostRestart(decode(params)?),
             "doctor" => Self::Doctor(decode(params)?),
-            "transactions" => {
+            "transactions.list" => {
                 let params: TransactionParams = decode(params)?;
                 validate_date(&params.from)?;
                 validate_date(&params.to)?;
@@ -225,9 +225,9 @@ impl Action {
                     params.from.is_empty() || params.to.is_empty() || params.from <= params.to,
                     "Transaction start date must be on or before the end date."
                 );
-                Self::Transactions(params)
+                Self::TransactionsList(params)
             }
-            "preview" => Self::Preview(validated_debt_params(decode(params)?)?),
+            "debts.get" => Self::DebtGet(validated_debt_params(decode(params)?)?),
             "comments.list" => Self::CommentsList(validated_debt_params(decode(params)?)?),
             "comments.create" => {
                 let params: CommentCreateParams = decode(params)?;
@@ -239,7 +239,7 @@ impl Action {
                 );
                 Self::CommentsCreate(params)
             }
-            "upload" => {
+            "attachments.upload" => {
                 let params: UploadParams = decode(params)?;
                 validate_uuid(&params.debt_uuid, "Debt")?;
                 ensure!(
@@ -250,7 +250,7 @@ impl Action {
                     params.confirmed,
                     "Receipt upload requires explicit confirmation."
                 );
-                Self::Upload(params)
+                Self::AttachmentUpload(params)
             }
             "attachments.delete" => {
                 let params: AttachmentDeleteParams = decode(params)?;
@@ -491,12 +491,12 @@ mod tests {
             id: "11111111-1111-4111-8111-111111111111".into(),
             issued_at: 1_720_000_000_000,
             nonce: "0123456789abcdef0123456789abcdef".into(),
-            action: "transactions".into(),
+            action: "transactions.list".into(),
             params: json!({"from": "2026-07-01", "to": ""}),
         };
         assert_eq!(
             request_mac(SECRET, &request).unwrap(),
-            "117dc57e662dd84046143d6228fdcadece2840274a356aa66a77e08a2e6808bc"
+            "7d7b88ed228a05c90a55606b99c2017fbd2119c15415937adba8c9bb406d5cd7"
         );
     }
 
@@ -504,7 +504,7 @@ mod tests {
     fn authenticates_and_parses_a_typed_request_once() {
         let signed = sign_request(
             SECRET,
-            Action::Transactions(TransactionParams {
+            Action::TransactionsList(TransactionParams {
                 from: "2026-07-01".into(),
                 to: "".into(),
                 missing_attachments: false,
@@ -522,7 +522,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             request.action,
-            Action::Transactions(TransactionParams {
+            Action::TransactionsList(TransactionParams {
                 from: "2026-07-01".into(),
                 to: "".into(),
                 missing_attachments: false,
@@ -543,7 +543,7 @@ mod tests {
     fn rejects_tampering_and_expiration() {
         let signed = sign_request(
             SECRET,
-            Action::Preview(DebtParams {
+            Action::DebtGet(DebtParams {
                 debt_uuid: "11111111-1111-4111-8111-111111111111".into(),
             }),
         )
@@ -599,18 +599,18 @@ mod tests {
         let invalid = [
             ("doctor", json!({"probe": true})),
             (
-                "transactions",
+                "transactions.list",
                 json!({"from": "2026-02-30", "to": "", "missingAttachments": false}),
             ),
             (
-                "transactions",
+                "transactions.list",
                 json!({"from": "2026-07-02", "to": "2026-07-01", "missingAttachments": false}),
             ),
             (
-                "transactions",
+                "transactions.list",
                 json!({"from": "", "to": "", "missingAttachments": "false"}),
             ),
-            ("preview", json!({"debtUuid": "not-a-uuid"})),
+            ("debts.get", json!({"debtUuid": "not-a-uuid"})),
             ("comments.list", json!({"debtUuid": "not-a-uuid"})),
             (
                 "comments.create",
@@ -629,7 +629,7 @@ mod tests {
                 }),
             ),
             (
-                "upload",
+                "attachments.upload",
                 json!({
                     "debtUuid": "11111111-1111-4111-8111-111111111111",
                     "filePath": "receipt.pdf",
@@ -637,7 +637,7 @@ mod tests {
                 }),
             ),
             (
-                "upload",
+                "attachments.upload",
                 json!({
                     "debtUuid": "11111111-1111-4111-8111-111111111111",
                     "filePath": "/tmp/receipt.pdf",

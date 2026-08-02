@@ -93,7 +93,9 @@ describe("capability policy", () => {
 
   test("keeps ordinary command handlers exhaustive with policy", () => {
     expect(Object.keys(commandActions)).toEqual(
-      Object.keys(actionCapabilities).filter((action) => action !== "upload"),
+      Object.keys(actionCapabilities).filter(
+        (action) => action !== "attachments.upload",
+      ),
     );
   });
 
