@@ -1,0 +1,10 @@
+{
+  "doctor": [],
+  "transactions": ["transactions.read"],
+  "preview": ["transactions.read"],
+  "upload": ["transactions.read", "attachments.write"],
+  "bookkeeping.get": ["bookkeeping.read"],
+  "bookkeeping.categories": ["bookkeeping.read"],
+  "bookkeeping.suggestions": ["bookkeeping.read"],
+  "audit.list": ["audit.read"]
+}

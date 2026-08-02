@@ -6,16 +6,17 @@
   "type": "module",
   "packageManager": "bun@1.3.13",
   "scripts": {
-    "build": "rm -rf dist/extension && tsgo -p tsconfig.extension.json && bun build src/extension/background.ts --target browser --format iife --outfile dist/extension/background.js && rm dist/extension/policy.js dist/extension/projections.js && cp src/extension/manifest.json dist/extension/manifest.json",
+    "build": "rm -rf dist/extension target/extension-tsgo && tsgo -p tsconfig.extension.json --outDir target/extension-tsgo && mkdir -p dist/extension && cp target/extension-tsgo/extension/config.js target/extension-tsgo/extension/content.js dist/extension/ && bun build src/extension/background.ts --target browser --format iife --banner '\"use strict\";' --outfile dist/extension/background.js && cp src/extension/manifest.json dist/extension/manifest.json",
     "check:artifacts": "bun run build && bun scripts/check-extension-artifacts.mjs",
-    "check:format": "oxfmt --check src/extension package.json tsconfig.json tsconfig.extension.json .oxfmtrc.json .oxlintrc.json",
+    "check:format": "oxfmt --check src/extension package.json tsconfig.json tsconfig.extension.json tsconfig.extension-test.json .oxfmtrc.json .oxlintrc.json",
     "check:lint": "oxlint src/extension --type-aware --deny-warnings",
-    "check:types": "tsgo -p tsconfig.extension.json --noEmit",
-    "format": "oxfmt --write src/extension package.json tsconfig.json tsconfig.extension.json .oxfmtrc.json .oxlintrc.json",
-    "sync:artifacts": "bun run build && cp dist/extension/background.js dist/extension/config.js dist/extension/content.js dist/extension/manifest.json assets/extension/",
+    "check:types": "tsgo -p tsconfig.extension.json --noEmit && tsgo -p tsconfig.extension-test.json",
+    "format": "oxfmt --write src/extension package.json tsconfig.json tsconfig.extension.json tsconfig.extension-test.json .oxfmtrc.json .oxlintrc.json",
+    "sync:artifacts": "bun run build && rm -rf assets/extension && mkdir -p assets/extension && cp dist/extension/* assets/extension/",
     "test:extension": "bun test src/extension"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.0",
     "@types/chrome": "^0.0.329",
     "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "oxfmt": "0.56.0",

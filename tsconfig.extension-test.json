@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.extension.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "types": ["bun", "chrome"]
+  },
+  "include": ["src/extension/**/*.ts"],
+  "exclude": []
+}

@@ -6,6 +6,7 @@ const maxBookkeepingItems = 500;
 const maxCategoryResults = 1000;
 const maxSuggestionResults = 100;
 const maxAuditResults = 25;
+const maxAuditEnvelopeResults = 200;
 const maxProjectionBytes = 512 * 1024;
 
 type JsonRecord = Record<string, unknown>;
@@ -127,17 +128,28 @@ export function projectBookkeepingDebt(
   debtUuid: string,
 ): JsonRecord {
   const debt = record(value, "Bookkeeping debt");
-  if (!Array.isArray(debt.items)) {
-    throw new Error("Holvi bookkeeping debt has no item list.");
+  const items =
+    debt.items === null || debt.items === undefined ? [] : debt.items;
+  if (!Array.isArray(items)) {
+    throw new Error("Holvi bookkeeping debt has an invalid item list.");
   }
-  if (debt.items.length > maxBookkeepingItems) {
+  if (items.length > maxBookkeepingItems) {
     throw new Error("Holvi bookkeeping debt exceeded its item limit.");
   }
-  if (!Array.isArray(debt.attachments)) {
-    throw new Error("Holvi bookkeeping debt has no attachment list.");
+  const attachments =
+    debt.attachments === null || debt.attachments === undefined
+      ? []
+      : debt.attachments;
+  if (!Array.isArray(attachments)) {
+    throw new Error("Holvi bookkeeping debt has an invalid attachment list.");
+  }
+  const responseUuid = uuid(debt.uuid, "Bookkeeping debt UUID");
+  const requestedUuid = uuid(debtUuid, "Debt UUID");
+  if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
+    throw new Error("Holvi bookkeeping debt UUID does not match the request.");
   }
 
-  const retained = debt.items.filter((item) => {
+  const retained = items.filter((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       return false;
     }
@@ -150,8 +162,8 @@ export function projectBookkeepingDebt(
       : {};
 
   return projection({
-    debtUuid: uuid(debtUuid, "Debt UUID"),
-    code: boundedString(debt.code, "Bookkeeping debt code"),
+    debtUuid: requestedUuid,
+    code: optionalString(debt.code, "Bookkeeping debt code"),
     bookingDate: optionalString(debt.booking_date, "Bookkeeping date"),
     counterparty:
       optionalString(debt.counterparty_name, "Bookkeeping counterparty") ??
@@ -160,7 +172,7 @@ export function projectBookkeepingDebt(
       debt.amount ?? debt.value ?? debt.total,
       "Bookkeeping amount",
     ),
-    currency: optionalString(debt.currency, "Bookkeeping currency") ?? "EUR",
+    currency: optionalString(debt.currency, "Bookkeeping currency"),
     bookkeepingStatus:
       optionalString(debt.bookkeeping_status, "Bookkeeping status") ??
       optionalString(debt.bookkeeping_state, "Bookkeeping state"),
@@ -178,8 +190,8 @@ export function projectBookkeepingDebt(
       debt.connection_uuid,
       "Bookkeeping connection",
     ),
-    attachmentCount: debt.attachments.length,
-    droppedItemCount: debt.items.length - retained.length,
+    attachmentCount: attachments.length,
+    droppedItemCount: items.length - retained.length,
     items: retained.map(bookkeepingItem),
   });
 }
@@ -275,10 +287,17 @@ export function projectAuditPage(value: unknown, limit: number): JsonRecord {
     throw new Error("Activity limit is outside the configured range.");
   }
   const page = record(value, "Activity page");
-  if (!Array.isArray(page.results) || page.results.length > maxAuditResults) {
+  if (
+    !Array.isArray(page.results) ||
+    page.results.length > maxAuditEnvelopeResults
+  ) {
     throw new Error("Holvi returned an unexpected activity feed shape.");
   }
-  if (page.next !== null && typeof page.next !== "string") {
+  if (
+    page.next !== null &&
+    page.next !== undefined &&
+    typeof page.next !== "string"
+  ) {
     throw new Error("Holvi activity pagination has an unexpected shape.");
   }
   const entries = page.results.map(auditEntry);
@@ -297,7 +316,7 @@ export function projectAuditPage(value: unknown, limit: number): JsonRecord {
   const results = entries.slice(0, limit);
   return projection({
     returnedCount: results.length,
-    hasMore: page.next !== null || entries.length > results.length,
+    hasMore: typeof page.next === "string" || entries.length > results.length,
     order: "newest-first",
     results,
   });

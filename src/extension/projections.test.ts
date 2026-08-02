@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { requiredCapabilities, supportedCapabilities } from "./policy.js";
+import policyFixture from "../../capability-policy.json";
+import {
+  actionCapabilities,
+  requiredCapabilities,
+  supportedCapabilities,
+} from "./policy.js";
 import {
   projectAuditPage,
   projectBookkeepingDebt,
@@ -12,6 +17,7 @@ const itemUuid = "22222222-2222-4222-8222-222222222222";
 
 function debt() {
   return {
+    uuid: debtUuid,
     code: "DEBT-1",
     booking_date: "2026-08-01",
     counterparty_name: "Example merchant",
@@ -54,6 +60,12 @@ function debt() {
 }
 
 describe("capability policy", () => {
+  test("matches the cross-language policy fixture", () => {
+    expect(JSON.stringify(actionCapabilities)).toBe(
+      JSON.stringify(policyFixture),
+    );
+  });
+
   test("rejects unknown actions and keeps capability areas separate", () => {
     expect(requiredCapabilities("fetch")).toBeNull();
     expect(requiredCapabilities("bookkeeping.get")).toEqual([
@@ -88,6 +100,21 @@ describe("bookkeeping projections", () => {
         },
       ],
     });
+  });
+
+  test("accepts omitted empty collections and verifies debt identity", () => {
+    const value = debt();
+    value.items = [];
+    delete (value as { attachments?: unknown }).attachments;
+    expect(projectBookkeepingDebt(value, debtUuid)).toMatchObject({
+      attachmentCount: 0,
+      items: [],
+    });
+
+    value.uuid = "99999999-9999-4999-8999-999999999999";
+    expect(() => projectBookkeepingDebt(value, debtUuid)).toThrow(
+      "does not match the request",
+    );
   });
 
   test("rejects malformed money instead of coercing it", () => {

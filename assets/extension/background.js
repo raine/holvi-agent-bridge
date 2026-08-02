@@ -1,4 +1,6 @@
+"use strict";
 (() => {
+
   // src/extension/projections.ts
   var uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   var decimalPattern = /^-?\d+(?:\.\d+)?$/;
@@ -7,6 +9,7 @@
   var maxCategoryResults = 1000;
   var maxSuggestionResults = 100;
   var maxAuditResults = 25;
+  var maxAuditEnvelopeResults = 200;
   var maxProjectionBytes = 512 * 1024;
   function record(value, label) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -86,16 +89,23 @@
   }
   function projectBookkeepingDebt(value, debtUuid) {
     const debt = record(value, "Bookkeeping debt");
-    if (!Array.isArray(debt.items)) {
-      throw new Error("Holvi bookkeeping debt has no item list.");
+    const items = debt.items === null || debt.items === undefined ? [] : debt.items;
+    if (!Array.isArray(items)) {
+      throw new Error("Holvi bookkeeping debt has an invalid item list.");
     }
-    if (debt.items.length > maxBookkeepingItems) {
+    if (items.length > maxBookkeepingItems) {
       throw new Error("Holvi bookkeeping debt exceeded its item limit.");
     }
-    if (!Array.isArray(debt.attachments)) {
-      throw new Error("Holvi bookkeeping debt has no attachment list.");
+    const attachments = debt.attachments === null || debt.attachments === undefined ? [] : debt.attachments;
+    if (!Array.isArray(attachments)) {
+      throw new Error("Holvi bookkeeping debt has an invalid attachment list.");
     }
-    const retained = debt.items.filter((item) => {
+    const responseUuid = uuid(debt.uuid, "Bookkeeping debt UUID");
+    const requestedUuid = uuid(debtUuid, "Debt UUID");
+    if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
+      throw new Error("Holvi bookkeeping debt UUID does not match the request.");
+    }
+    const retained = items.filter((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) {
         return false;
       }
@@ -104,20 +114,20 @@
     });
     const merchant = debt.merchant && typeof debt.merchant === "object" ? debt.merchant : {};
     return projection({
-      debtUuid: uuid(debtUuid, "Debt UUID"),
-      code: boundedString(debt.code, "Bookkeeping debt code"),
+      debtUuid: requestedUuid,
+      code: optionalString(debt.code, "Bookkeeping debt code"),
       bookingDate: optionalString(debt.booking_date, "Bookkeeping date"),
       counterparty: optionalString(debt.counterparty_name, "Bookkeeping counterparty") ?? optionalString(merchant.name, "Bookkeeping merchant"),
       amount: decimal(debt.amount ?? debt.value ?? debt.total, "Bookkeeping amount"),
-      currency: optionalString(debt.currency, "Bookkeeping currency") ?? "EUR",
+      currency: optionalString(debt.currency, "Bookkeeping currency"),
       bookkeepingStatus: optionalString(debt.bookkeeping_status, "Bookkeeping status") ?? optionalString(debt.bookkeeping_state, "Bookkeeping state"),
       exportStatus: optionalString(debt.export_status, "Bookkeeping export status"),
       type: optionalString(debt.type, "Bookkeeping type"),
       subtype: optionalString(debt.subtype, "Bookkeeping subtype"),
       paymentAccountUuid: optionalUuid(debt.payment_account_uuid, "Bookkeeping payment account"),
       connectionUuid: optionalUuid(debt.connection_uuid, "Bookkeeping connection"),
-      attachmentCount: debt.attachments.length,
-      droppedItemCount: debt.items.length - retained.length,
+      attachmentCount: attachments.length,
+      droppedItemCount: items.length - retained.length,
       items: retained.map(bookkeepingItem)
     });
   }
@@ -190,10 +200,10 @@
       throw new Error("Activity limit is outside the configured range.");
     }
     const page = record(value, "Activity page");
-    if (!Array.isArray(page.results) || page.results.length > maxAuditResults) {
+    if (!Array.isArray(page.results) || page.results.length > maxAuditEnvelopeResults) {
       throw new Error("Holvi returned an unexpected activity feed shape.");
     }
-    if (page.next !== null && typeof page.next !== "string") {
+    if (page.next !== null && page.next !== undefined && typeof page.next !== "string") {
       throw new Error("Holvi activity pagination has an unexpected shape.");
     }
     const entries = page.results.map(auditEntry);
@@ -207,7 +217,7 @@
     const results = entries.slice(0, limit);
     return projection({
       returnedCount: results.length,
-      hasMore: page.next !== null || entries.length > results.length,
+      hasMore: typeof page.next === "string" || entries.length > results.length,
       order: "newest-first",
       results
     });
