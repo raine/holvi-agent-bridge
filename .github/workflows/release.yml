@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  BIN_NAME: holvi
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install extension dependencies
+        run: bun install --frozen-lockfile
+      - name: Verify extension artifacts
+        run: bun run check:artifacts
+      - name: Verify release version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "v${version}" = "$GITHUB_REF_NAME"
+      - name: Verify crate package
+        run: |
+          cargo package --locked
+          package_files=$(cargo package --locked --list)
+          grep -Fx 'assets/extension/background.js' <<< "$package_files"
+          grep -Fx 'assets/extension/config.js' <<< "$package_files"
+          grep -Fx 'assets/extension/content.js' <<< "$package_files"
+          grep -Fx 'assets/extension/manifest.json' <<< "$package_files"
+
+  nix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - name: Build Nix package
+        run: nix build --no-link --print-build-logs
+
+  build:
+    needs: [verify, nix]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          bin="target/${{ matrix.target }}/release/${BIN_NAME}"
+          package="package"
+          mkdir -p "$package"
+          cp "$bin" "$package/"
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            strip "$package/${BIN_NAME}" || true
+          fi
+          archive="${BIN_NAME}-${{ matrix.platform }}.tar.gz"
+          tar -C "$package" -czf "$archive" .
+          shasum -a 256 "$archive" > "${BIN_NAME}-${{ matrix.platform }}.sha256"
+      - name: Smoke test packaged binary
+        run: '"$GITHUB_WORKSPACE/package/${BIN_NAME}" --version'
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            ${{ env.BIN_NAME }}-${{ matrix.platform }}.tar.gz
+            ${{ env.BIN_NAME }}-${{ matrix.platform }}.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+          generate_release_notes: true
+          files: |
+            *.tar.gz
+            *.sha256
+
+  update-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          merge-multiple: true
+      - uses: actions/checkout@v5
+        with:
+          repository: raine/homebrew-holvi-agent-bridge
+          token: ${{ secrets.RELEASE_TOKEN }}
+          path: tap
+      - name: Generate formula and push to tap
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VERSION="${VERSION#v}"
+          SHA_ARM=$(awk '{print $1}' holvi-darwin-arm64.sha256)
+          SHA_LINUX=$(awk '{print $1}' holvi-linux-amd64.sha256)
+
+          cat > tap/Formula/holvi.rb << EOF
+          class Holvi < Formula
+            desc "Capability-scoped local agent bridge for Holvi"
+            homepage "https://github.com/raine/holvi-agent-bridge"
+            version "${VERSION}"
+
+            on_macos do
+              depends_on arch: :arm64
+
+              url "https://github.com/raine/holvi-agent-bridge/releases/download/v${VERSION}/holvi-darwin-arm64.tar.gz"
+              sha256 "${SHA_ARM}"
+            end
+
+            on_linux do
+              url "https://github.com/raine/holvi-agent-bridge/releases/download/v${VERSION}/holvi-linux-amd64.tar.gz"
+              sha256 "${SHA_LINUX}"
+            end
+
+            def install
+              bin.install "holvi"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/holvi --version")
+            end
+          end
+          EOF
+          sed -i 's/^          //' tap/Formula/holvi.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/holvi.rb
+          git commit -m "holvi ${VERSION}"
+          git pull --rebase
+          git push

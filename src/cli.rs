@@ -29,6 +29,7 @@ config.";
 #[derive(Parser)]
 #[command(
     name = "holvi",
+    version,
     about = "Access Holvi through the local agent bridge",
     after_help = HELP_AFTER
 )]
@@ -500,6 +501,18 @@ fn print_transactions(transactions: TransactionResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exposes_package_version() {
+        let error = Cli::try_parse_from(["holvi", "--version"])
+            .err()
+            .expect("--version should stop argument parsing");
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert_eq!(
+            error.to_string(),
+            format!("holvi {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
 
     #[test]
     fn parses_config_commands() {
