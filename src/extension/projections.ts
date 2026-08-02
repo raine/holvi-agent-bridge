@@ -7,6 +7,9 @@ const maxCategoryResults = 1000;
 const maxSuggestionResults = 100;
 const maxAuditResults = 25;
 const maxAuditEnvelopeResults = 200;
+const maxFeedPageResults = 10_000;
+const maxPaymentMatches = 1000;
+const maxDebtAttachments = 1000;
 const maxProjectionBytes = 512 * 1024;
 
 type JsonRecord = Record<string, unknown>;
@@ -97,6 +100,195 @@ function projection<T>(value: T): T {
   return value;
 }
 
+function stringOrEmpty(value: unknown, label: string): string {
+  return optionalString(value, label) ?? "";
+}
+
+function timestamp(value: unknown, label: string): string {
+  const text = boundedString(value, label);
+  if (!Number.isFinite(Date.parse(text))) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return text;
+}
+
+function nonnegativeInteger(value: unknown, label: string): number {
+  const count =
+    typeof value === "string" && /^\d{1,16}$/.test(value)
+      ? Number(value)
+      : value;
+  if (!Number.isSafeInteger(count) || (count as number) < 0) {
+    throw new Error(`${label} must be a nonnegative integer.`);
+  }
+  return count as number;
+}
+
+function optionalRecord(value: unknown, label: string): JsonRecord {
+  if (value === null || value === undefined) {
+    return {};
+  }
+  return record(value, label);
+}
+
+function boundedArray(
+  value: unknown,
+  label: string,
+  limit: number,
+  optional = false,
+): unknown[] {
+  if (optional && (value === null || value === undefined)) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} has an unexpected shape.`);
+  }
+  if (value.length > limit) {
+    throw new Error(`${label} exceeded its result limit.`);
+  }
+  return value;
+}
+
+function directDebtUuid(value: unknown): string | null {
+  const matches = boundedArray(
+    value,
+    "Payment matches",
+    maxPaymentMatches,
+    true,
+  );
+  let direct: JsonRecord | null = null;
+  for (const entry of matches) {
+    const match = record(entry, "Payment match");
+    const matchType = optionalString(match.match_type, "Payment match type");
+    if (matchType === "direct" && direct === null) {
+      direct = match;
+    }
+  }
+  return direct ? uuid(direct.uuid, "Payment debt UUID") : null;
+}
+
+function payment(value: unknown): JsonRecord {
+  const source = record(value, "Payment");
+  const counterparty = optionalRecord(
+    source.counterparty,
+    "Payment counterparty",
+  );
+  const fx = optionalRecord(
+    source.fx_meta,
+    "Payment foreign exchange metadata",
+  );
+  const paymentTimestamp = timestamp(source.ux_timestamp, "Payment timestamp");
+  const rawAttachmentCount = source.attachment_count ?? 0;
+  return {
+    paymentUuid: uuid(source.uuid, "Payment UUID"),
+    debtUuid: directDebtUuid(source.matches),
+    date: paymentTimestamp.slice(0, 10),
+    timestamp: paymentTimestamp,
+    counterparty:
+      optionalString(counterparty.display_name, "Payment counterparty name") ??
+      optionalString(source.counterparty_name, "Payment counterparty name") ??
+      stringOrEmpty(source.description, "Payment description"),
+    description: stringOrEmpty(source.description, "Payment description"),
+    direction: stringOrEmpty(source.direction, "Payment direction"),
+    amount: decimal(source.amount ?? source.value, "Payment amount"),
+    currency: optionalString(source.currency, "Payment currency") ?? "EUR",
+    originalAmount: decimal(
+      fx.counterparty_amount ?? fx.counterparty_value,
+      "Payment original amount",
+    ),
+    originalCurrency: optionalString(
+      fx.counterparty_currency,
+      "Payment original currency",
+    ),
+    state: stringOrEmpty(source.state, "Payment state"),
+    attachmentCount: nonnegativeInteger(
+      rawAttachmentCount,
+      "Payment attachment count",
+    ),
+  };
+}
+
+export function projectTransactionFeedPage(value: unknown): {
+  results: JsonRecord[];
+  hasMore: boolean;
+  nextCursor: string;
+} {
+  const page = record(value, "Payments feed page");
+  const results = boundedArray(
+    page.results,
+    "Payments feed results",
+    maxFeedPageResults,
+  ).map(payment);
+  const pagination = record(page.pagination, "Payments feed pagination");
+  if (typeof pagination.has_more !== "boolean") {
+    throw new Error("Payments feed pagination has an unexpected shape.");
+  }
+  const nextCursor = stringOrEmpty(
+    pagination.next_cursor,
+    "Payments feed cursor",
+  );
+  if (pagination.has_more && !nextCursor) {
+    throw new Error("Holvi pagination omitted its next cursor.");
+  }
+  return projection({
+    results,
+    hasMore: pagination.has_more,
+    nextCursor: pagination.has_more ? nextCursor : "",
+  });
+}
+
+export function projectTransactionListing<T>(value: T): T {
+  return projection(value);
+}
+
+function debtRecord(
+  value: unknown,
+  debtUuid: string,
+  label: string,
+): JsonRecord {
+  const debt = record(value, label);
+  const requestedUuid = uuid(debtUuid, "Debt UUID");
+  const responseUuid = uuid(debt.uuid, `${label} UUID`);
+  if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
+    throw new Error(
+      `Holvi ${label.toLowerCase()} UUID does not match the request.`,
+    );
+  }
+  const attachments = boundedArray(
+    debt.attachments,
+    `${label} attachments`,
+    maxDebtAttachments,
+    true,
+  );
+  const merchant = optionalRecord(debt.merchant, `${label} merchant`);
+  return projection({
+    debtUuid: requestedUuid,
+    code: stringOrEmpty(debt.code, `${label} code`),
+    counterparty:
+      optionalString(debt.counterparty_name, `${label} counterparty`) ??
+      stringOrEmpty(merchant.name, `${label} merchant name`),
+    amount: decimal(debt.amount ?? debt.value ?? debt.total, `${label} amount`),
+    currency: optionalString(debt.currency, `${label} currency`) ?? "EUR",
+    attachmentCount: attachments.length,
+    bookkeepingStatus:
+      optionalString(debt.bookkeeping_status, `${label} bookkeeping status`) ??
+      stringOrEmpty(debt.bookkeeping_state, `${label} bookkeeping state`),
+  });
+}
+
+export function projectDebtPreview(
+  value: unknown,
+  debtUuid: string,
+): JsonRecord {
+  return debtRecord(value, debtUuid, "Debt");
+}
+
+export function projectUploadDebtRead(
+  value: unknown,
+  debtUuid: string,
+): JsonRecord {
+  return debtRecord(value, debtUuid, "Upload debt");
+}
+
 function bookkeepingItem(value: unknown): JsonRecord {
   const item = record(value, "Bookkeeping item");
   return {
@@ -136,13 +328,12 @@ export function projectBookkeepingDebt(
   if (items.length > maxBookkeepingItems) {
     throw new Error("Holvi bookkeeping debt exceeded its item limit.");
   }
-  const attachments =
-    debt.attachments === null || debt.attachments === undefined
-      ? []
-      : debt.attachments;
-  if (!Array.isArray(attachments)) {
-    throw new Error("Holvi bookkeeping debt has an invalid attachment list.");
-  }
+  const attachments = boundedArray(
+    debt.attachments,
+    "Bookkeeping debt attachments",
+    maxDebtAttachments,
+    true,
+  );
   const responseUuid = uuid(debt.uuid, "Bookkeeping debt UUID");
   const requestedUuid = uuid(debtUuid, "Debt UUID");
   if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {

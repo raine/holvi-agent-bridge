@@ -2,9 +2,19 @@ import {
   projectAuditPage,
   projectBookkeepingDebt,
   projectCategories,
+  projectDebtPreview,
   projectSuggestions,
+  projectTransactionFeedPage,
+  projectTransactionListing,
+  projectUploadDebtRead,
 } from "./projections.js";
 import { requiredCapabilities, supportedCapabilities } from "./policy.js";
+import {
+  UploadTransferLifecycle,
+  type UploadTransfer,
+  uploadTransferExpiryMs,
+  verifyUploadTransfer,
+} from "./upload-transfer.js";
 
 declare function importScripts(...urls: string[]): void;
 
@@ -14,13 +24,6 @@ const staticConfig = _HOLVI_AGENT_BRIDGE_STATIC_CONFIG;
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const requestIdPattern = /^[0-9a-f-]{16,64}$/i;
-const uploadMimeTypes = new Set([
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-]);
-const fileChunkBytes = 480 * 1024;
 
 interface RuntimeBridgeConfig {
   groupPathSegment: string;
@@ -48,40 +51,6 @@ interface PendingAuth {
   tabId: number;
 }
 
-interface PaymentRecord {
-  uuid?: unknown;
-  ux_timestamp?: unknown;
-  description?: unknown;
-  counterparty?: { display_name?: unknown };
-  counterparty_name?: unknown;
-  direction?: unknown;
-  amount?: unknown;
-  value?: unknown;
-  currency?: unknown;
-  state?: unknown;
-  fx_meta?: {
-    counterparty_amount?: unknown;
-    counterparty_value?: unknown;
-    counterparty_currency?: unknown;
-  } | null;
-  attachment_count?: unknown;
-  matches?: Array<{
-    match_type?: unknown;
-    uuid?: unknown;
-  }>;
-}
-
-interface UploadTransfer {
-  id: string;
-  debtUuid: string;
-  fileName: string;
-  mimeType: string;
-  size: number;
-  sha256: string;
-  chunkCount: number;
-  chunks: string[];
-}
-
 interface NativeMessage {
   type?: string;
   id?: string;
@@ -101,7 +70,8 @@ interface NativeMessage {
 let runtimeConfig: RuntimeBridgeConfig | null = null;
 let nativePort: chrome.runtime.Port | null = null;
 let reconnectTimer: number | null = null;
-let activeUpload: UploadTransfer | null = null;
+let uploadExpiryTimer: number | null = null;
+const uploadTransfers = new UploadTransferLifecycle();
 const tabConnections = new Map<number, TabConnection>();
 const authRequests = new Map<string, PendingAuth>();
 
@@ -143,17 +113,6 @@ function validateRuntimeConfig(value: unknown): RuntimeBridgeConfig {
     );
   }
   return config as RuntimeBridgeConfig;
-}
-
-function validUploadFileName(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length >= 1 &&
-    value.length <= 255 &&
-    !value.includes("/") &&
-    !value.includes("\\") &&
-    !value.includes("\0")
-  );
 }
 
 function requireCapabilities(...capabilities: string[]): void {
@@ -198,6 +157,24 @@ function reportTabState(): void {
   );
 }
 
+function clearUploadExpiry(): void {
+  if (uploadExpiryTimer !== null) {
+    clearTimeout(uploadExpiryTimer);
+    uploadExpiryTimer = null;
+  }
+}
+
+function scheduleUploadExpiry(): void {
+  clearUploadExpiry();
+  uploadExpiryTimer = self.setTimeout(() => {
+    uploadExpiryTimer = null;
+    const expiredId = uploadTransfers.expire(Date.now());
+    if (expiredId) {
+      postResult(expiredId, false, new Error("Receipt transfer expired."));
+    }
+  }, uploadTransferExpiryMs);
+}
+
 function postResult(id: string, ok: boolean, value: unknown): void {
   try {
     postNative(
@@ -225,7 +202,8 @@ function connectNative(): void {
   nativePort.onDisconnect.addListener(() => {
     nativePort = null;
     runtimeConfig = null;
-    activeUpload = null;
+    uploadTransfers.cancel();
+    clearUploadExpiry();
     if (tabConnections.size > 0 && reconnectTimer === null) {
       reconnectTimer = self.setTimeout(() => {
         reconnectTimer = null;
@@ -435,44 +413,6 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function directDebtUuid(payment: PaymentRecord): string | null {
-  const directMatch = Array.isArray(payment.matches)
-    ? payment.matches.find((match) => match?.match_type === "direct")
-    : undefined;
-  const uuid = asString(directMatch?.uuid);
-  return uuidPattern.test(uuid) ? uuid : null;
-}
-
-function projectPayment(payment: PaymentRecord): Record<string, unknown> {
-  const paymentUuid = validateUuid(asString(payment.uuid), "payment");
-  const timestamp = asString(payment.ux_timestamp);
-  const counterparty =
-    asString(payment.counterparty?.display_name) ||
-    asString(payment.counterparty_name) ||
-    asString(payment.description);
-  const originalAmount =
-    payment.fx_meta?.counterparty_amount ??
-    payment.fx_meta?.counterparty_value ??
-    null;
-  const originalCurrency = payment.fx_meta?.counterparty_currency ?? null;
-
-  return {
-    paymentUuid,
-    debtUuid: directDebtUuid(payment),
-    date: timestamp.slice(0, 10),
-    timestamp,
-    counterparty,
-    description: asString(payment.description),
-    direction: asString(payment.direction),
-    amount: payment.amount ?? payment.value ?? null,
-    currency: asString(payment.currency) || "EUR",
-    originalAmount,
-    originalCurrency,
-    state: asString(payment.state),
-    attachmentCount: Number(payment.attachment_count || 0),
-  };
-}
-
 function withinDateRange(
   payment: Record<string, unknown>,
   from: string,
@@ -480,11 +420,6 @@ function withinDateRange(
 ): boolean {
   const date = asString(payment.date);
   return Boolean(date) && (!from || date >= from) && (!to || date <= to);
-}
-
-interface FeedPage {
-  results?: PaymentRecord[];
-  pagination?: { has_more?: boolean; next_cursor?: string };
 }
 
 async function listTransactions(
@@ -498,22 +433,12 @@ async function listTransactions(
   let pages = 0;
 
   do {
-    const page = (await apiRequest(
-      auth,
-      feedPath(cursor, missingAttachments),
-    )) as FeedPage;
-    if (
-      !Array.isArray(page?.results) ||
-      typeof page?.pagination?.has_more !== "boolean"
-    ) {
-      throw new Error("Holvi returned an unexpected payments feed shape.");
-    }
+    const page = projectTransactionFeedPage(
+      await apiRequest(auth, feedPath(cursor, missingAttachments)),
+    );
     for (const item of page.results) {
-      const projected = projectPayment(item);
-      if (
-        withinDateRange(projected, asString(params.from), asString(params.to))
-      ) {
-        results.push(projected);
+      if (withinDateRange(item, asString(params.from), asString(params.to))) {
+        results.push(item);
       }
     }
 
@@ -521,20 +446,22 @@ async function listTransactions(
     if (results.length > staticConfig.maxTransactionResults) {
       throw new Error("The transaction listing exceeded its result limit.");
     }
-    if (pages >= staticConfig.maxTransactionPages && page.pagination.has_more) {
+    if (pages >= staticConfig.maxTransactionPages && page.hasMore) {
       throw new Error("The transaction listing exceeded its page limit.");
     }
-    cursor = page.pagination.has_more ? page.pagination.next_cursor || "" : "";
-    if (page.pagination.has_more && !cursor) {
-      throw new Error("Holvi pagination omitted its next cursor.");
-    }
+    cursor = page.nextCursor;
     if (cursor && seenCursors.has(cursor)) {
       throw new Error("Holvi repeated a pagination cursor.");
     }
     seenCursors.add(cursor);
   } while (cursor);
 
-  return { pages, count: results.length, missingAttachments, results };
+  return projectTransactionListing({
+    pages,
+    count: results.length,
+    missingAttachments,
+    results,
+  });
 }
 
 function validateUuid(value: string, resource: string): string {
@@ -544,44 +471,10 @@ function validateUuid(value: string, resource: string): string {
   return value;
 }
 
-interface DebtRecord {
-  code?: unknown;
-  counterparty_name?: unknown;
-  merchant?: { name?: unknown };
-  amount?: unknown;
-  value?: unknown;
-  total?: unknown;
-  currency?: unknown;
-  attachments?: unknown[];
-  bookkeeping_status?: unknown;
-  bookkeeping_state?: unknown;
-}
-
-function attachmentCount(debt: DebtRecord): number {
-  return Array.isArray(debt?.attachments) ? debt.attachments.length : 0;
-}
-
 function debtPath(debtUuid: string): string {
   return `${configuredApiRoot()}debt/${encodeURIComponent(
     validateUuid(debtUuid, "debt"),
   )}/`;
-}
-
-function projectDebt(
-  debt: DebtRecord,
-  debtUuid: string,
-): Record<string, unknown> {
-  return {
-    debtUuid,
-    code: asString(debt?.code),
-    counterparty:
-      asString(debt?.counterparty_name) || asString(debt?.merchant?.name),
-    amount: debt?.amount ?? debt?.value ?? debt?.total ?? null,
-    currency: asString(debt?.currency) || "EUR",
-    attachmentCount: attachmentCount(debt),
-    bookkeepingStatus:
-      asString(debt?.bookkeeping_status) || asString(debt?.bookkeeping_state),
-  };
 }
 
 async function previewDebt(
@@ -589,8 +482,10 @@ async function previewDebt(
   debtUuid: string,
 ): Promise<Record<string, unknown>> {
   const validUuid = validateUuid(debtUuid, "debt");
-  const debt = (await apiRequest(auth, debtPath(validUuid))) as DebtRecord;
-  return projectDebt(debt, validUuid);
+  return projectDebtPreview(
+    await apiRequest(auth, debtPath(validUuid)),
+    validUuid,
+  );
 }
 
 async function bookkeepingDebt(
@@ -646,29 +541,17 @@ async function recentAudit(
   );
 }
 
-function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(new ArrayBuffer(binary.length));
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
-}
-
 async function uploadReceipt(
   auth: Auth,
   upload: UploadTransfer,
 ): Promise<Record<string, unknown>> {
   requireCapabilities("transactions.read", "attachments.write");
   const debtUuid = validateUuid(upload.debtUuid, "debt");
-  const before = (await apiRequest(auth, debtPath(debtUuid))) as DebtRecord;
-  const beforeCount = attachmentCount(before);
+  const before = projectUploadDebtRead(
+    await apiRequest(auth, debtPath(debtUuid)),
+    debtUuid,
+  );
+  const beforeCount = before.attachmentCount as number;
   if (beforeCount !== 0) {
     throw new Error(
       `Upload refused because the transaction has ${beforeCount} attachment(s).`,
@@ -680,18 +563,7 @@ async function uploadReceipt(
     );
   }
 
-  const bytes = base64ToBytes(upload.chunks.join(""));
-  if (bytes.byteLength !== upload.size) {
-    throw new Error(
-      "Receipt byte count changed during native messaging transfer.",
-    );
-  }
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  if (bytesToHex(new Uint8Array(digest)) !== upload.sha256) {
-    throw new Error(
-      "Receipt checksum changed during native messaging transfer.",
-    );
-  }
+  const bytes = await verifyUploadTransfer(upload);
 
   const form = new FormData();
   form.append("content_type", "debt");
@@ -706,18 +578,21 @@ async function uploadReceipt(
     body: form,
   });
 
-  let after: DebtRecord = {};
+  let afterCount = 0;
   for (const delay of [0, 250, 500, 1000, 2000]) {
     if (delay) {
       await new Promise((resolve) => self.setTimeout(resolve, delay));
     }
-    after = (await apiRequest(auth, debtPath(debtUuid))) as DebtRecord;
-    if (attachmentCount(after) > 0) {
+    const after = projectUploadDebtRead(
+      await apiRequest(auth, debtPath(debtUuid)),
+      debtUuid,
+    );
+    afterCount = after.attachmentCount as number;
+    if (afterCount > 0) {
       break;
     }
   }
 
-  const afterCount = attachmentCount(after);
   if (afterCount !== 1) {
     throw new Error(
       `Holvi accepted the upload but verification found ${afterCount} attachment(s). Inspect the transaction before retrying.`,
@@ -752,13 +627,13 @@ async function handleCommand(message: NativeMessage): Promise<unknown> {
       };
       if (runtimeConfig?.capabilities.includes("transactions.read")) {
         requireCapabilities("transactions.read");
-        const page = (await apiRequest(auth, feedPath())) as FeedPage;
+        const page = projectTransactionFeedPage(
+          await apiRequest(auth, feedPath()),
+        );
         return {
           ...base,
           probeAction: "transactions",
-          firstPageResults: Array.isArray(page?.results)
-            ? page.results.length
-            : 0,
+          firstPageResults: page.results.length,
         };
       }
       if (runtimeConfig?.capabilities.includes("bookkeeping.read")) {
@@ -798,15 +673,9 @@ async function handleCommand(message: NativeMessage): Promise<unknown> {
   }
 }
 
-async function finishUpload(message: NativeMessage): Promise<unknown> {
-  if (!activeUpload || activeUpload.id !== message.id) {
-    throw new Error("Upload completion did not match an active transfer.");
-  }
-  if (activeUpload.chunks.length !== activeUpload.chunkCount) {
-    throw new Error("Receipt transfer ended before every chunk arrived.");
-  }
+async function finishUpload(upload: UploadTransfer): Promise<unknown> {
   const auth = await requestAuth();
-  return uploadReceipt(auth, activeUpload);
+  return uploadReceipt(auth, upload);
 }
 
 function handleNativeMessage(value: unknown): void {
@@ -839,78 +708,53 @@ function handleNativeMessage(value: unknown): void {
 
   if (message.type === "upload_start") {
     try {
-      if (activeUpload) {
-        throw new Error("Another receipt upload is active.");
-      }
-      const debtUuid = validateUuid(message.debtUuid || "", "debt");
-      if (
-        !Number.isSafeInteger(message.size) ||
-        (message.size || 0) < 1 ||
-        (message.size || 0) > (runtimeConfig?.maxFileBytes || 0)
-      ) {
-        throw new Error("Receipt size is outside the configured limit.");
-      }
-      const expectedChunks = Math.ceil(
-        (message.size as number) / fileChunkBytes,
+      uploadTransfers.start(
+        {
+          id,
+          debtUuid: message.debtUuid,
+          fileName: message.fileName,
+          mimeType: message.mimeType,
+          size: message.size,
+          sha256: message.sha256,
+          chunkCount: message.chunkCount,
+        },
+        runtimeConfig?.maxFileBytes || 0,
+        Date.now(),
       );
-      if (message.chunkCount !== expectedChunks) {
-        throw new Error("Receipt chunk count does not match its size.");
-      }
-      if (!/^[a-f0-9]{64}$/.test(message.sha256 || "")) {
-        throw new Error("Receipt checksum is invalid.");
-      }
-      if (
-        !validUploadFileName(message.fileName) ||
-        !uploadMimeTypes.has(message.mimeType || "")
-      ) {
-        throw new Error("Receipt filename or media type is invalid.");
-      }
-      activeUpload = {
-        id,
-        debtUuid,
-        fileName: message.fileName,
-        mimeType: message.mimeType as string,
-        size: message.size as number,
-        sha256: message.sha256 as string,
-        chunkCount: message.chunkCount,
-        chunks: [],
-      };
+      scheduleUploadExpiry();
     } catch (error) {
-      activeUpload = null;
       postResult(id, false, error);
     }
     return;
   }
 
   if (message.type === "upload_chunk") {
-    if (
-      !activeUpload ||
-      activeUpload.id !== id ||
-      message.index !== activeUpload.chunks.length ||
-      typeof message.data !== "string" ||
-      message.data.length > 700_000
-    ) {
-      const failedId = activeUpload?.id || id;
-      activeUpload = null;
-      postResult(
-        failedId,
-        false,
-        new Error(
-          "Receipt chunks arrived out of order or exceeded their limit.",
-        ),
-      );
-      return;
+    try {
+      uploadTransfers.append(id, message.index, message.data, Date.now());
+    } catch (error) {
+      if (!uploadTransfers.hasActiveTransfer()) {
+        clearUploadExpiry();
+      }
+      postResult(id, false, error);
     }
-    activeUpload.chunks.push(message.data);
     return;
   }
 
   if (message.type === "upload_end") {
-    finishUpload(message)
+    let upload: UploadTransfer;
+    try {
+      upload = uploadTransfers.complete(id, Date.now());
+      clearUploadExpiry();
+    } catch (error) {
+      if (!uploadTransfers.hasActiveTransfer()) {
+        clearUploadExpiry();
+      }
+      postResult(id, false, error);
+      return;
+    }
+    finishUpload(upload)
       .then((data) => postResult(id, true, data))
       .catch((error) => postResult(id, false, error))
-      .finally(() => {
-        activeUpload = null;
-      });
+      .finally(() => uploadTransfers.finish(id));
   }
 }
