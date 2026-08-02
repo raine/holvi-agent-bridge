@@ -30,10 +30,6 @@ Runtime requirements:
 - macOS or Linux
 - Google Chrome
 - a Holvi account with access to the target company
-- local directories containing any files the agent may attach
-
-The `holvi` executable contains the complete native bridge and the compiled
-Chrome extension. It has no Node or Bun runtime dependency.
 
 Building from source requires Rust 1.85 or later. Extension development also
 uses Bun and the dependencies in `package.json`.
