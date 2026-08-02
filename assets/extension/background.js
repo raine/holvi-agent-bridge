@@ -443,6 +443,7 @@
 
   // src/extension/session.ts
   var uuidPattern2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  var poolHandlePattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
   function groupPathSegmentFromUrl(value, accountOrigin) {
     try {
       const url = new URL(value);
@@ -469,7 +470,7 @@
     const config = value;
     const groupParts = (config.groupPathSegment || "").match(/^([^/+]+)\+([^/]+)$/);
     const groupPoolHandle = groupParts?.[1] || "";
-    if (!groupParts || groupPoolHandle !== config.poolHandle || !uuidPattern2.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < minimumFileBytes || (config.maxFileBytes || 0) > staticConfig.maxFileBytes) {
+    if (!groupParts || !poolHandlePattern.test(config.poolHandle || "") || groupPoolHandle !== config.poolHandle || !uuidPattern2.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < minimumFileBytes || (config.maxFileBytes || 0) > staticConfig.maxFileBytes) {
       throw new Error("The native host supplied an invalid Holvi account boundary.");
     }
     return config;
@@ -734,7 +735,7 @@
     }
     append(id, index, data, now) {
       const active = this.receiving(id, now);
-      if (index !== active.transfer.chunks.length || typeof data !== "string" || data.length < 1 || data.length > 700000 || !base64Pattern.test(data)) {
+      if (active.transfer.chunks.length === active.transfer.chunkCount || index !== active.transfer.chunks.length || typeof data !== "string" || data.length < 1 || data.length > 700000 || !base64Pattern.test(data)) {
         this.active = undefined;
         throw new UploadTransferError("Receipt chunks arrived out of order or exceeded their limit.", id);
       }

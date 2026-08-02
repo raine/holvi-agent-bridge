@@ -7,6 +7,7 @@ import type {
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const poolHandlePattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 export function groupPathSegmentFromUrl(
   value: string,
@@ -57,6 +58,7 @@ export function validateRuntimeConfig(
   const groupPoolHandle = groupParts?.[1] || "";
   if (
     !groupParts ||
+    !poolHandlePattern.test(config.poolHandle || "") ||
     groupPoolHandle !== config.poolHandle ||
     !uuidPattern.test(config.paymentAccountUuid || "") ||
     !Array.isArray(config.capabilities) ||

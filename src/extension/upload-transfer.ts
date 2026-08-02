@@ -167,6 +167,7 @@ export class UploadTransferLifecycle {
   append(id: string, index: unknown, data: unknown, now: number): void {
     const active = this.receiving(id, now);
     if (
+      active.transfer.chunks.length === active.transfer.chunkCount ||
       index !== active.transfer.chunks.length ||
       typeof data !== "string" ||
       data.length < 1 ||

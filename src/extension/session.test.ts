@@ -73,6 +73,40 @@ describe("bridge session", () => {
     ).toThrow("invalid Holvi account boundary");
   });
 
+  test("mirrors the native pool-handle grammar", () => {
+    for (const poolHandle of ["A", "A_b-C9", `A${"b".repeat(127)}`]) {
+      expect(() =>
+        validateRuntimeConfig(
+          {
+            ...runtimeConfig,
+            groupPathSegment: `${poolHandle}+example`,
+            poolHandle,
+          },
+          staticConfig,
+        ),
+      ).not.toThrow();
+    }
+
+    for (const poolHandle of [
+      "_example",
+      "-example",
+      "example.pool",
+      "exämple",
+      `A${"b".repeat(128)}`,
+    ]) {
+      expect(() =>
+        validateRuntimeConfig(
+          {
+            ...runtimeConfig,
+            groupPathSegment: `${poolHandle}+example`,
+            poolHandle,
+          },
+          staticConfig,
+        ),
+      ).toThrow("invalid Holvi account boundary");
+    }
+  });
+
   test("rejects incompatible native host identities with recovery guidance", () => {
     expect(validateHostIdentity(1, "0.1.0", staticConfig)).toEqual({
       protocolVersion: 1,

@@ -90,6 +90,17 @@ describe("upload transfer lifecycle", () => {
     expect(lifecycle.hasActiveTransfer()).toBeFalse();
   });
 
+  test("rejects chunks beyond the declared chunk count", () => {
+    const lifecycle = new UploadTransferLifecycle();
+    start(lifecycle);
+    lifecycle.append(transferId, 0, "YWJj", 1001);
+
+    expect(() => lifecycle.append(transferId, 1, "ZA==", 1002)).toThrow(
+      "out of order or exceeded",
+    );
+    expect(lifecycle.hasActiveTransfer()).toBeFalse();
+  });
+
   test("completes exact ordered chunks and holds the slot through commit", async () => {
     const lifecycle = new UploadTransferLifecycle();
     start(lifecycle);
