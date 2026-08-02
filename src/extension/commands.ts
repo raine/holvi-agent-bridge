@@ -1,5 +1,6 @@
 import type { Auth, NativeMessage } from "./background-types.js";
 import { AttachmentDeletionWorkflow } from "./attachment-deletion-workflow.js";
+import { BookkeepingDescriptionWorkflow } from "./bookkeeping-description-workflow.js";
 import { HolviApi } from "./holvi-api.js";
 import {
   isBridgeAction,
@@ -12,6 +13,20 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function requiredString(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("The local helper supplied invalid description data.");
+  }
+  return value;
+}
+
+function asBoolean(value: unknown): boolean {
+  if (typeof value !== "boolean") {
+    throw new Error("The local helper supplied invalid confirmation data.");
+  }
+  return value;
+}
+
 type CommandHandler = (
   auth: Auth,
   params: Record<string, unknown>,
@@ -20,6 +35,7 @@ type CommandHandler = (
 export class CommandService {
   private readonly handlers: Record<CommandAction, CommandHandler>;
   private readonly attachmentDeletion: AttachmentDeletionWorkflow;
+  private readonly bookkeepingDescriptions: BookkeepingDescriptionWorkflow;
 
   constructor(
     private readonly session: BridgeSession,
@@ -27,6 +43,10 @@ export class CommandService {
     private readonly requestAuth: () => Promise<Auth>,
   ) {
     this.attachmentDeletion = new AttachmentDeletionWorkflow(session, api);
+    this.bookkeepingDescriptions = new BookkeepingDescriptionWorkflow(
+      session,
+      api,
+    );
     this.handlers = {
       doctor: (auth) => this.doctor(auth),
       transactions: (auth, params) => this.api.listTransactions(auth, params),
@@ -39,6 +59,13 @@ export class CommandService {
       "bookkeeping.categories": (auth) => this.api.bookkeepingCategories(auth),
       "bookkeeping.suggestions": (auth, params) =>
         this.api.bookkeepingSuggestions(auth, asString(params.debtUuid)),
+      "bookkeeping.set-description": (auth, params) =>
+        this.bookkeepingDescriptions.change(auth, {
+          debtUuid: asString(params.debtUuid),
+          itemUuid: asString(params.itemUuid),
+          description: requiredString(params.description),
+          confirmed: asBoolean(params.confirmed),
+        }),
       "audit.list": (auth, params) => this.api.recentAudit(auth, params.limit),
     };
   }

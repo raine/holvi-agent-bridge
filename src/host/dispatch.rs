@@ -62,7 +62,8 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::protocol::{
-        AttachmentDeleteParams, AuditListParams, DebtParams, EmptyParams, UploadParams,
+        AttachmentDeleteParams, AuditListParams, BookkeepingDescriptionParams, DebtParams,
+        EmptyParams, UploadParams,
     };
 
     use super::*;
@@ -78,6 +79,36 @@ mod tests {
         assert!(validate(&request, &config, true, false).is_err());
         config.capabilities = vec!["audit.read".into()];
         assert!(validate(&request, &config, true, false).is_ok());
+    }
+
+    #[test]
+    fn bookkeeping_description_write_requires_its_dedicated_capability() {
+        let request = test_request(Action::BookkeepingSetDescription(
+            BookkeepingDescriptionParams {
+                debt_uuid: "11111111-1111-4111-8111-111111111111".into(),
+                item_uuid: "22222222-2222-4222-8222-222222222222".into(),
+                description: "Replacement".into(),
+                confirmed: false,
+            },
+        ));
+        assert!(
+            validate(
+                &request,
+                &test_config(vec!["bookkeeping.read".into()]),
+                true,
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            validate(
+                &request,
+                &test_config(vec!["bookkeeping.write".into()]),
+                true,
+                false
+            )
+            .is_ok()
+        );
     }
 
     #[test]

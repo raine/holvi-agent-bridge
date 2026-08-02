@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import contract from "../../bridge-contract.json";
-import { auditLimitMax, auditLimitMin, auditPageSize } from "./holvi-api.js";
+import { bookkeepingDescriptionMaxBytes } from "./bookkeeping-description-workflow.js";
+import {
+  auditLimitMax,
+  auditLimitMin,
+  auditPageSize,
+  maxApiResponseBytes,
+} from "./holvi-api.js";
 import { nativeMessageTypes, nativeReconnectDelayMs } from "./native-bridge.js";
 import {
   actionCapabilities,
@@ -103,6 +109,10 @@ describe("cross-language bridge contract", () => {
       max: auditLimitMax,
       pageSize: auditPageSize,
     }).toEqual(contract.auditLimit);
+    expect(maxApiResponseBytes).toBe(contract.apiResponseBytes.max);
+    expect(bookkeepingDescriptionMaxBytes).toBe(
+      contract.bookkeepingDescriptionBytes.max,
+    );
   });
 
   test("matches Native Messaging variants", () => {

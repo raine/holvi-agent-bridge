@@ -23,7 +23,14 @@
     "bookkeeping.get": ["bookkeeping.read"],
     "bookkeeping.categories": ["bookkeeping.read"],
     "bookkeeping.suggestions": ["bookkeeping.read"],
+    "bookkeeping.set-description": ["bookkeeping.write"],
     "audit.list": ["audit.read"]
+  },
+  "apiResponseBytes": {
+    "max": 2097152
+  },
+  "bookkeepingDescriptionBytes": {
+    "max": 4096
   },
   "fileBytes": {
     "min": 1,

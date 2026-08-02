@@ -9,6 +9,7 @@ export const actionCapabilities = {
   "bookkeeping.get": ["bookkeeping.read"],
   "bookkeeping.categories": ["bookkeeping.read"],
   "bookkeeping.suggestions": ["bookkeeping.read"],
+  "bookkeeping.set-description": ["bookkeeping.write"],
   "audit.list": ["audit.read"],
 } as const satisfies Record<string, readonly string[]>;
 
@@ -23,6 +24,7 @@ export const commandActions = {
   "bookkeeping.get": true,
   "bookkeeping.categories": true,
   "bookkeeping.suggestions": true,
+  "bookkeeping.set-description": true,
   "audit.list": true,
 } as const satisfies Record<CommandAction, true>;
 

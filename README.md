@@ -38,6 +38,8 @@ you enable.
 - List and filter transactions for one Holvi payment account.
 - View debt and bookkeeping details without exposing full API responses.
 - List bookkeeping categories and suggestions for a debt.
+- Replace one bookkeeping line-item description with dry-run and verification
+  safeguards.
 - View a limited page of recent account activity, newest first.
 - Preview receipt attachments, require confirmation before upload, and check the
   attachment count before and after the upload.
@@ -162,6 +164,7 @@ The private config lists the capabilities available to the agent.
 | `attachments.write`  | Attach a local file after preflight checks and verify the result     |
 | `attachments.delete` | Delete one selected debt attachment after preview and verification   |
 | `bookkeeping.read`   | Inspect accounting details, categories, and category suggestions     |
+| `bookkeeping.write`  | Replace one bookkeeping line-item description and verify the result  |
 | `audit.read`         | Inspect up to 25 recent pool activity entries                         |
 
 Attachment writes and deletions also require `transactions.read` because the
@@ -250,9 +253,10 @@ attachment state fails closed.
 
 ## Bookkeeping and audit workflow
 
-Enable `bookkeeping.read` or `audit.read` during installation to expose their
-commands. These capabilities cover the configured Holvi pool, while
-`transactions.read` remains restricted to the configured payment account.
+Enable `bookkeeping.read`, `bookkeeping.write`, or `audit.read` during
+installation to expose their commands. These capabilities cover the configured
+Holvi pool. Description writes additionally require the debt's payment account
+to match the configured payment account.
 
 View the accounting document and its active line items:
 
@@ -273,6 +277,27 @@ holvi bookkeeping categories
 holvi bookkeeping suggestions \
   --debt '11111111-1111-4111-8111-111111111111'
 ```
+
+Preview a line-item description replacement, then repeat the same command with
+`--yes` after checking the exact current and proposed descriptions:
+
+```sh
+holvi bookkeeping set-description \
+  --debt '11111111-1111-4111-8111-111111111111' \
+  --item '22222222-2222-4222-8222-222222222222' \
+  --description 'Replacement description'
+
+holvi bookkeeping set-description \
+  --debt '11111111-1111-4111-8111-111111111111' \
+  --item '22222222-2222-4222-8222-222222222222' \
+  --description 'Replacement description' \
+  --yes
+```
+
+The confirmed command reads the debt, sends one `PATCH` containing the complete
+active line-item array, and reads the debt once more. It verifies the exact
+description, sibling identity and fields, and unrelated critical debt fields.
+It never retries a failed or ambiguous write.
 
 Inspect up to 25 recent activity entries:
 
@@ -299,10 +324,11 @@ that the command does not use.
 | [`upload`](#holvi-upload)                                   | `transactions.read`, plus `attachments.write` with `--yes`  | Validate or upload one receipt                    |
 | [`attachments`](#holvi-attachments)                         | `transactions.read`, `attachments.delete`                   | Inspect or delete debt attachments                |
 | [`attachments delete`](#holvi-attachments-delete)           | `transactions.read`, `attachments.delete`                   | Preview or delete one selected attachment         |
-| [`bookkeeping`](#holvi-bookkeeping)                         | `bookkeeping.read`                                          | Read bookkeeping details and category data        |
+| [`bookkeeping`](#holvi-bookkeeping)                         | `bookkeeping.read` or `bookkeeping.write`                   | Access scoped bookkeeping operations              |
 | [`bookkeeping get`](#holvi-bookkeeping-get)                 | `bookkeeping.read`                                         | Inspect bookkeeping details and active line items |
 | [`bookkeeping categories`](#holvi-bookkeeping-categories)   | `bookkeeping.read`                                         | List bookkeeping categories                       |
 | [`bookkeeping suggestions`](#holvi-bookkeeping-suggestions) | `bookkeeping.read`                                         | List suggested category codes for one debt        |
+| [`bookkeeping set-description`](#holvi-bookkeeping-set-description) | `bookkeeping.write`                               | Replace one line-item description                 |
 | [`audit`](#holvi-audit)                                     | `audit.read`                                               | Read recent account activity                      |
 | [`audit list`](#holvi-audit-list)                           | `audit.read`                                               | List recent pool activity                         |
 
@@ -522,7 +548,8 @@ no projected payload, so success depends on the post-delete debt read.
 
 ### `holvi bookkeeping`
 
-Groups the commands that read bookkeeping details and category data.
+Groups the commands for scoped bookkeeping reads and line-item description
+writes.
 
 ```sh
 holvi bookkeeping <COMMAND>
@@ -564,6 +591,33 @@ holvi bookkeeping suggestions --debt UUID
 The JSON result contains `debtUuid` and `categoryCodes`. The command converts
 suggestion records to category codes, returns at most 100, and rejects unknown
 item shapes.
+
+### `holvi bookkeeping set-description`
+
+Targets one debt UUID and active line-item UUID and accepts a replacement for the
+Holvi field labeled "Kuvaus". Descriptions may be empty and are limited to 4096
+UTF-8 bytes.
+
+```sh
+holvi bookkeeping set-description \
+  --debt UUID \
+  --item UUID \
+  --description TEXT \
+  [--yes]
+```
+
+Without `--yes`, the command performs one authoritative debt read and returns
+`currentDescription`, `proposedDescription`, `dryRun: true`, and
+`writePerformed: false`. It requires `bookkeeping.write` for both dry runs and
+confirmed writes. `bookkeeping.read` does not grant this operation.
+
+With `--yes`, the extension requires exactly one matching active line item and a
+payment account matching the configured account. It sends exactly one `PATCH`
+with the complete active line-item array copied from the authoritative read. A
+single-item payload is not used. One post-write read verifies the exact target
+description, target fields, sibling order and content, and critical debt fields.
+Verification failures report that the debt needs inspection before another
+attempt.
 
 ### `holvi audit`
 
@@ -685,10 +739,11 @@ embedded artifacts.
 The capabilities use these Holvi application endpoints:
 
 ```text
-GET  /api/pool/{poolHandle}/ux/payments-feed/
-GET  /api/pool/{poolHandle}/debt/{debtUuid}/
-GET  /api/pool/{poolHandle}/debt/{debtUuid}/haip/bookkeeping-suggestions/
-GET  /api/pool/{poolHandle}/category/
+GET    /api/pool/{poolHandle}/ux/payments-feed/
+GET    /api/pool/{poolHandle}/debt/{debtUuid}/
+PATCH  /api/pool/{poolHandle}/debt/{debtUuid}/
+GET    /api/pool/{poolHandle}/debt/{debtUuid}/haip/bookkeeping-suggestions/
+GET    /api/pool/{poolHandle}/category/
 GET    /api/pool/{poolHandle}/log-feed/
 POST   /api/pool/{poolHandle}/attachment/formpost/
 DELETE /api/pool/{poolHandle}/attachment/{attachmentCode}/

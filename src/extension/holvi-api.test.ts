@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Auth, StaticBridgeConfig } from "./background-types.js";
-import { HolviApi } from "./holvi-api.js";
+import { HolviApi, maxApiResponseBytes } from "./holvi-api.js";
 import { BridgeSession } from "./session.js";
 
 const staticConfig: StaticBridgeConfig = {
@@ -45,9 +45,14 @@ function payment(uuid: string, timestamp: string) {
   };
 }
 
-function jsonResponse(value: unknown): Response {
+function jsonResponse(
+  value: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+): Response {
   return new Response(JSON.stringify(value), {
-    headers: { "content-type": "application/json" },
+    status,
+    headers: { "content-type": "application/json", ...headers },
   });
 }
 
@@ -190,6 +195,45 @@ describe("Holvi API boundary", () => {
 
     await expect(api.listTransactions(auth, {})).rejects.toThrow(
       "repeated a pagination cursor",
+    );
+  });
+
+  test("bounds and validates API response bodies", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const path = `${session.apiRoot()}category/`;
+
+    const declaredOversize = new HolviApi(staticConfig, session, async () =>
+      jsonResponse([], 200, {
+        "content-length": String(maxApiResponseBytes + 1),
+      }),
+    );
+    await expect(declaredOversize.request(auth, path)).rejects.toThrow(
+      "response exceeded its size limit",
+    );
+
+    const streamedOversize = new HolviApi(
+      staticConfig,
+      session,
+      async () =>
+        new Response("x".repeat(maxApiResponseBytes + 1), {
+          headers: { "content-type": "text/plain" },
+        }),
+    );
+    await expect(streamedOversize.request(auth, path)).rejects.toThrow(
+      "response exceeded its size limit",
+    );
+
+    const malformed = new HolviApi(
+      staticConfig,
+      session,
+      async () =>
+        new Response("{", {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    await expect(malformed.request(auth, path)).rejects.toThrow(
+      "malformed JSON",
     );
   });
 });

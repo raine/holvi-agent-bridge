@@ -101,6 +101,9 @@ describe("capability policy", () => {
     expect(requiredCapabilities("bookkeeping.get")).toEqual([
       "bookkeeping.read",
     ]);
+    expect(requiredCapabilities("bookkeeping.set-description")).toEqual([
+      "bookkeeping.write",
+    ]);
     expect(requiredCapabilities("audit.list")).toEqual(["audit.read"]);
     expect(supportedCapabilities).toEqual(
       new Set([
@@ -108,6 +111,7 @@ describe("capability policy", () => {
         "attachments.write",
         "attachments.delete",
         "bookkeeping.read",
+        "bookkeeping.write",
         "audit.read",
       ]),
     );

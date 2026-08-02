@@ -22,18 +22,18 @@ use crate::config::{
 use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
 use crate::install::{HostRestartStatus, InstallOptions, InstallResult, install_bridge};
 use crate::protocol::{
-    Action, AttachmentDeleteParams, AuditListParams, DebtParams, EmptyParams, HOST_BUILD_VERSION,
+    Action, AttachmentDeleteParams, AuditListParams, BOOKKEEPING_DESCRIPTION_MAX_BYTES,
+    BookkeepingDescriptionParams, DebtParams, EmptyParams, HOST_BUILD_VERSION,
     MAX_SOCKET_RESPONSE_BYTES, NATIVE_PROTOCOL_VERSION, TransactionParams, UploadParams,
     sign_request, validate_attachment_code,
 };
 use crate::receipt_sandbox::resolve_receipt_file;
 use crate::skill::{self, CodingAgentArg};
 
-const HELP_AFTER: &str =
-    "Commands that contact Holvi require their configured capability. Upload and
-attachment deletion are dry checks unless --yes is present. The configured signed-in
-Holvi group tab must remain open in Chrome. Attachment paths are restricted by the
-private local config.";
+const HELP_AFTER: &str = "Commands that contact Holvi require their configured capability. Upload,
+attachment deletion, and bookkeeping description changes are dry runs unless --yes is
+present. The configured signed-in Holvi group tab must remain open in Chrome. Attachment
+paths are restricted by the private local config.";
 
 #[derive(Parser)]
 #[command(
@@ -73,7 +73,7 @@ enum Command {
         #[command(subcommand)]
         command: AttachmentsCommand,
     },
-    /// Read bookkeeping details and category data
+    /// Access scoped bookkeeping operations
     Bookkeeping {
         #[command(subcommand)]
         command: BookkeepingCommand,
@@ -107,6 +107,8 @@ enum BookkeepingCommand {
     Categories,
     /// List suggested category codes for one debt
     Suggestions(PreviewArgs),
+    /// Replace one bookkeeping line-item description
+    SetDescription(BookkeepingDescriptionArgs),
 }
 
 #[derive(Subcommand)]
@@ -200,6 +202,18 @@ struct AttachmentDeleteArgs {
     #[arg(long)]
     attachment: String,
     /// Confirm the irreversible deletion
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args)]
+struct BookkeepingDescriptionArgs {
+    #[arg(long)]
+    debt: String,
+    #[arg(long)]
+    item: String,
+    #[arg(long, value_parser = parse_description, allow_hyphen_values = true)]
+    description: String,
     #[arg(long)]
     yes: bool,
 }
@@ -423,6 +437,22 @@ pub async fn run() -> Result<()> {
                     .await?,
                 )?;
             }
+            BookkeepingCommand::SetDescription(args) => {
+                validate_uuid(&args.debt, "Debt")?;
+                validate_uuid(&args.item, "Item")?;
+                print_json(
+                    &request_host(
+                        &config.hmac_secret,
+                        Action::BookkeepingSetDescription(BookkeepingDescriptionParams {
+                            debt_uuid: args.debt,
+                            item_uuid: args.item,
+                            description: args.description,
+                            confirmed: args.yes,
+                        }),
+                    )
+                    .await?,
+                )?;
+            }
         },
         Command::Audit { command } => match command {
             AuditCommand::List { limit } => {
@@ -464,6 +494,13 @@ fn edit_config(path: &Path) -> Result<()> {
         "Editor command from {source} failed with {status}."
     );
     Ok(())
+}
+
+fn parse_description(value: &str) -> std::result::Result<String, String> {
+    if value.len() > BOOKKEEPING_DESCRIPTION_MAX_BYTES {
+        return Err("must be at most 4096 bytes".into());
+    }
+    Ok(value.to_owned())
 }
 
 fn parse_date(value: &str) -> std::result::Result<String, String> {
@@ -1142,7 +1179,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_new_capability_commands_and_bounds_audit_limit() {
+    fn parses_capability_commands_and_bounds_their_values() {
         let bookkeeping = Cli::try_parse_from([
             "holvi",
             "bookkeeping",
@@ -1175,6 +1212,43 @@ mod tests {
                 command: AttachmentsCommand::Delete(AttachmentDeleteArgs { yes: true, .. })
             })
         ));
+
+        let description = Cli::try_parse_from([
+            "holvi",
+            "bookkeeping",
+            "set-description",
+            "--debt",
+            "11111111-1111-4111-8111-111111111111",
+            "--item",
+            "22222222-2222-4222-8222-222222222222",
+            "--description",
+            "Replacement",
+            "--yes",
+        ])
+        .unwrap();
+        let Some(Command::Bookkeeping {
+            command: BookkeepingCommand::SetDescription(args),
+        }) = description.command
+        else {
+            panic!()
+        };
+        assert_eq!(args.description, "Replacement");
+        assert!(args.yes);
+        let too_long = "x".repeat(BOOKKEEPING_DESCRIPTION_MAX_BYTES + 1);
+        assert!(
+            Cli::try_parse_from([
+                "holvi",
+                "bookkeeping",
+                "set-description",
+                "--debt",
+                "11111111-1111-4111-8111-111111111111",
+                "--item",
+                "22222222-2222-4222-8222-222222222222",
+                "--description",
+                &too_long,
+            ])
+            .is_err()
+        );
 
         let audit = Cli::try_parse_from(["holvi", "audit", "list", "--limit", "25"]).unwrap();
         assert!(matches!(
@@ -1232,7 +1306,11 @@ mod tests {
                 .any(|line| line.starts_with("  .. bookkeeping.read") && line.ends_with("disabled"))
         );
         assert!(output.contains("\nOperations\n----------\n"));
-        assert!(output.contains("  ok doctor                   enabled\n"));
+        assert!(
+            output
+                .lines()
+                .any(|line| line.starts_with("  ok doctor") && line.ends_with("enabled"))
+        );
         assert!(
             output
                 .lines()

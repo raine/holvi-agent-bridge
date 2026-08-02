@@ -13,9 +13,53 @@ import { BridgeSession, validateUuid } from "./session.js";
 export const auditLimitMin = 1;
 export const auditLimitMax = 25;
 export const auditPageSize = 25;
+export const maxApiResponseBytes = 2 * 1024 * 1024;
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+async function boundedResponseText(response: Response): Promise<string> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && /^\d+$/.test(contentLength)) {
+    const declaredLength = Number(contentLength);
+    if (
+      !Number.isSafeInteger(declaredLength) ||
+      declaredLength > maxApiResponseBytes
+    ) {
+      throw new Error("Holvi API response exceeded its size limit.");
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    length += value.byteLength;
+    if (length > maxApiResponseBytes) {
+      await reader.cancel();
+      throw new Error("Holvi API response exceeded its size limit.");
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("Holvi API returned invalid UTF-8.");
+  }
 }
 
 function withinDateRange(
@@ -68,9 +112,15 @@ export class HolviApi {
     );
 
     const contentType = response.headers.get("content-type") || "";
-    const body: unknown = contentType.includes("application/json")
-      ? await response.json()
-      : await response.text();
+    const text = await boundedResponseText(response);
+    let body: unknown = text;
+    if (contentType.includes("application/json")) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        throw new Error("Holvi API returned malformed JSON.");
+      }
+    }
 
     if (!response.ok) {
       const detail =

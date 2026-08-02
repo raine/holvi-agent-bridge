@@ -389,6 +389,7 @@
     "bookkeeping.get": ["bookkeeping.read"],
     "bookkeeping.categories": ["bookkeeping.read"],
     "bookkeeping.suggestions": ["bookkeeping.read"],
+    "bookkeeping.set-description": ["bookkeeping.write"],
     "audit.list": ["audit.read"]
   };
   var supportedCapabilities = new Set(Object.values(actionCapabilities).flat());
@@ -564,9 +565,211 @@
     }
   }
 
+  // src/extension/bookkeeping-description-workflow.ts
+  var bookkeepingDescriptionMaxBytes = 4096;
+  var maxBookkeepingItems2 = 500;
+  var criticalDebtFields = [
+    "uuid",
+    "payment_account_uuid",
+    "code",
+    "booking_date",
+    "amount",
+    "value",
+    "total",
+    "currency",
+    "bookkeeping_status",
+    "bookkeeping_state",
+    "type",
+    "subtype",
+    "connection_uuid",
+    "attachments"
+  ];
+  function record2(value, label) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${label} has an unexpected shape.`);
+    }
+    return value;
+  }
+  function boundedDescription(value, label) {
+    if (typeof value !== "string" || new TextEncoder().encode(value).byteLength > bookkeepingDescriptionMaxBytes) {
+      throw new Error(`${label} must be at most 4096 bytes.`);
+    }
+    return value;
+  }
+  function sameUuid(left, right) {
+    return left.toLowerCase() === right.toLowerCase();
+  }
+  function responseUuid(value, label) {
+    if (typeof value !== "string") {
+      throw new Error(`${label} must be a UUID.`);
+    }
+    return validateUuid(value, label);
+  }
+  function canonicalJson(value) {
+    function normalize(entry) {
+      if (Array.isArray(entry)) {
+        return entry.map(normalize);
+      }
+      if (entry && typeof entry === "object") {
+        return Object.fromEntries(Object.entries(entry).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, normalize(item)]));
+      }
+      return entry;
+    }
+    return JSON.stringify(normalize(value));
+  }
+  function parseSnapshot(value, debtUuid, itemUuid, paymentAccountUuid) {
+    const debt = record2(value, "Bookkeeping debt");
+    const responseDebtUuid = responseUuid(debt.uuid, "bookkeeping debt");
+    if (!sameUuid(responseDebtUuid, debtUuid)) {
+      throw new Error("Holvi bookkeeping debt UUID does not match the request.");
+    }
+    const responsePaymentAccountUuid = responseUuid(debt.payment_account_uuid, "bookkeeping debt payment account");
+    if (!sameUuid(responsePaymentAccountUuid, paymentAccountUuid)) {
+      throw new Error("Holvi bookkeeping debt payment account does not match the configured payment account.");
+    }
+    if (!Array.isArray(debt.items)) {
+      throw new Error("Holvi bookkeeping debt has an invalid item list.");
+    }
+    if (debt.items.length > maxBookkeepingItems2) {
+      throw new Error("Holvi bookkeeping debt exceeded its item limit.");
+    }
+    const matchingItems = [];
+    const items = [];
+    for (const [index, value2] of debt.items.entries()) {
+      const item = record2(value2, `Bookkeeping item ${index + 1}`);
+      const responseItemUuid = responseUuid(item.uuid, `bookkeeping item ${index + 1}`);
+      if (typeof item.type !== "string" || typeof item.active !== "boolean") {
+        throw new Error(`Bookkeeping item ${index + 1} has an unexpected shape.`);
+      }
+      if (sameUuid(responseItemUuid, itemUuid)) {
+        matchingItems.push(item);
+      }
+      if (item.type === "line_item" && item.active) {
+        boundedDescription(item.description, `Bookkeeping item ${index + 1} description`);
+        items.push(item);
+      }
+    }
+    if (matchingItems.length !== 1) {
+      throw new Error("Holvi bookkeeping debt must contain exactly one matching item UUID.");
+    }
+    const targetIndex = items.indexOf(matchingItems[0]);
+    if (targetIndex < 0) {
+      throw new Error("The matching bookkeeping item is not an active line item.");
+    }
+    const currentDescription = boundedDescription(items[targetIndex].description, "Current bookkeeping description");
+    return { debt, items, targetIndex, currentDescription };
+  }
+  function verifyCriticalDebtFields(before, after) {
+    for (const field of criticalDebtFields) {
+      if (canonicalJson(before[field]) !== canonicalJson(after[field])) {
+        throw new Error(`Bookkeeping verification found a changed debt field: ${field}.`);
+      }
+    }
+  }
+  function withoutDescription(item) {
+    const copy = { ...item };
+    delete copy.description;
+    return copy;
+  }
+  function verifyItems(expected, after, itemUuid, description) {
+    if (after.items.length !== expected.length) {
+      throw new Error("Bookkeeping verification found a changed line-item count.");
+    }
+    for (let index = 0;index < expected.length; index += 1) {
+      const expectedItem = expected[index];
+      const actualItem = after.items[index];
+      const expectedUuid = responseUuid(expectedItem.uuid, "expected bookkeeping item");
+      const actualUuid = responseUuid(actualItem.uuid, "verified bookkeeping item");
+      if (!sameUuid(expectedUuid, actualUuid)) {
+        throw new Error("Bookkeeping verification found changed sibling item identity.");
+      }
+      if (sameUuid(expectedUuid, itemUuid)) {
+        if (actualItem.description !== description) {
+          throw new Error("Bookkeeping verification found an unexpected description.");
+        }
+        if (canonicalJson(withoutDescription(expectedItem)) !== canonicalJson(withoutDescription(actualItem))) {
+          throw new Error("Bookkeeping verification found changed fields on the target item.");
+        }
+      } else if (canonicalJson(expectedItem) !== canonicalJson(actualItem)) {
+        throw new Error("Bookkeeping verification found a changed sibling item.");
+      }
+    }
+  }
+
+  class BookkeepingDescriptionWorkflow {
+    session;
+    api;
+    constructor(session, api) {
+      this.session = session;
+      this.api = api;
+    }
+    async change(auth, change) {
+      this.session.requireCapabilities("bookkeeping.write");
+      const debtUuid = validateUuid(change.debtUuid, "debt");
+      const itemUuid = validateUuid(change.itemUuid, "item");
+      const description = boundedDescription(change.description, "Bookkeeping description");
+      if (typeof change.confirmed !== "boolean") {
+        throw new Error("Bookkeeping confirmation has an unexpected shape.");
+      }
+      const path = this.api.debtPath(debtUuid);
+      const before = parseSnapshot(await this.api.request(auth, path), debtUuid, itemUuid, this.session.config.paymentAccountUuid);
+      const report = {
+        debtUuid,
+        itemUuid,
+        currentDescription: before.currentDescription,
+        proposedDescription: description
+      };
+      if (!change.confirmed) {
+        return {
+          ...report,
+          dryRun: true,
+          writePerformed: false,
+          next: "Repeat the command with --yes after checking these descriptions."
+        };
+      }
+      const items = before.items.map((item, index) => index === before.targetIndex ? { ...item, description } : item);
+      try {
+        await this.api.request(auth, path, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items })
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? ` ${error.message}` : "";
+        throw new Error(`Bookkeeping description write failed or had an ambiguous outcome.${detail} Inspect the debt before retrying.`);
+      }
+      try {
+        const after = parseSnapshot(await this.api.request(auth, path), debtUuid, itemUuid, this.session.config.paymentAccountUuid);
+        verifyCriticalDebtFields(before.debt, after.debt);
+        verifyItems(items, after, itemUuid, description);
+      } catch (error) {
+        const detail = error instanceof Error ? ` ${error.message}` : "";
+        throw new Error(`Holvi accepted the write but post-write verification failed.${detail} Inspect the debt before retrying.`);
+      }
+      return {
+        ...report,
+        dryRun: false,
+        writePerformed: true,
+        verified: true
+      };
+    }
+  }
+
   // src/extension/commands.ts
   function asString(value) {
     return typeof value === "string" ? value : "";
+  }
+  function requiredString(value) {
+    if (typeof value !== "string") {
+      throw new Error("The local helper supplied invalid description data.");
+    }
+    return value;
+  }
+  function asBoolean(value) {
+    if (typeof value !== "boolean") {
+      throw new Error("The local helper supplied invalid confirmation data.");
+    }
+    return value;
   }
 
   class CommandService {
@@ -575,11 +778,13 @@
     requestAuth;
     handlers;
     attachmentDeletion;
+    bookkeepingDescriptions;
     constructor(session, api, requestAuth) {
       this.session = session;
       this.api = api;
       this.requestAuth = requestAuth;
       this.attachmentDeletion = new AttachmentDeletionWorkflow(session, api);
+      this.bookkeepingDescriptions = new BookkeepingDescriptionWorkflow(session, api);
       this.handlers = {
         doctor: (auth) => this.doctor(auth),
         transactions: (auth, params) => this.api.listTransactions(auth, params),
@@ -588,6 +793,12 @@
         "bookkeeping.get": (auth, params) => this.api.bookkeepingDebt(auth, asString(params.debtUuid)),
         "bookkeeping.categories": (auth) => this.api.bookkeepingCategories(auth),
         "bookkeeping.suggestions": (auth, params) => this.api.bookkeepingSuggestions(auth, asString(params.debtUuid)),
+        "bookkeeping.set-description": (auth, params) => this.bookkeepingDescriptions.change(auth, {
+          debtUuid: asString(params.debtUuid),
+          itemUuid: asString(params.itemUuid),
+          description: requiredString(params.description),
+          confirmed: asBoolean(params.confirmed)
+        }),
         "audit.list": (auth, params) => this.api.recentAudit(auth, params.limit)
       };
     }
@@ -655,8 +866,47 @@
   var auditLimitMin = 1;
   var auditLimitMax = 25;
   var auditPageSize = 25;
+  var maxApiResponseBytes = 2 * 1024 * 1024;
   function asString2(value) {
     return typeof value === "string" ? value : "";
+  }
+  async function boundedResponseText(response) {
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && /^\d+$/.test(contentLength)) {
+      const declaredLength = Number(contentLength);
+      if (!Number.isSafeInteger(declaredLength) || declaredLength > maxApiResponseBytes) {
+        throw new Error("Holvi API response exceeded its size limit.");
+      }
+    }
+    if (!response.body) {
+      return "";
+    }
+    const reader = response.body.getReader();
+    const chunks = [];
+    let length = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      length += value.byteLength;
+      if (length > maxApiResponseBytes) {
+        await reader.cancel();
+        throw new Error("Holvi API response exceeded its size limit.");
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error("Holvi API returned invalid UTF-8.");
+    }
   }
   function withinDateRange(payment2, from, to) {
     const date = asString2(payment2.date);
@@ -691,7 +941,15 @@
         redirect: "error"
       });
       const contentType = response.headers.get("content-type") || "";
-      const body = contentType.includes("application/json") ? await response.json() : await response.text();
+      const text = await boundedResponseText(response);
+      let body = text;
+      if (contentType.includes("application/json")) {
+        try {
+          body = JSON.parse(text);
+        } catch {
+          throw new Error("Holvi API returned malformed JSON.");
+        }
+      }
       if (!response.ok) {
         const detail = typeof body === "string" ? body.slice(0, 300) : JSON.stringify(body).slice(0, 300);
         throw new Error(`Holvi API returned ${response.status}: ${detail}`);

@@ -8,9 +8,9 @@ use crate::config::{
 };
 use crate::host::{FILE_CHUNK_BYTES, REQUEST_TIMEOUT};
 use crate::protocol::{
-    AUDIT_LIMIT_MAX, AUDIT_LIMIT_MIN, EXTENSION_TO_HOST_MESSAGES, HOST_BUILD_VERSION,
-    HOST_TO_EXTENSION_MESSAGES, NATIVE_PROTOCOL_VERSION, REQUEST_MAX_AGE_MS,
-    SIGNED_REQUEST_VERSION,
+    AUDIT_LIMIT_MAX, AUDIT_LIMIT_MIN, BOOKKEEPING_DESCRIPTION_MAX_BYTES,
+    EXTENSION_TO_HOST_MESSAGES, HOST_BUILD_VERSION, HOST_TO_EXTENSION_MESSAGES,
+    NATIVE_PROTOCOL_VERSION, REQUEST_MAX_AGE_MS, SIGNED_REQUEST_VERSION,
 };
 use crate::receipt_sandbox::{MIN_RECEIPT_BYTES, UPLOAD_MIME_TYPES};
 
@@ -61,6 +61,10 @@ fn native_constants_match_the_bridge_contract() {
     );
     assert_eq!(u64::from(AUDIT_LIMIT_MIN), contract["auditLimit"]["min"]);
     assert_eq!(u64::from(AUDIT_LIMIT_MAX), contract["auditLimit"]["max"]);
+    assert_eq!(
+        BOOKKEEPING_DESCRIPTION_MAX_BYTES as u64,
+        contract["bookkeepingDescriptionBytes"]["max"]
+    );
 
     assert_eq!(
         REQUEST_MAX_AGE_MS,

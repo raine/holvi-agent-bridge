@@ -22,6 +22,7 @@ pub const MAX_SOCKET_RESPONSE_BYTES: usize = MAX_NATIVE_INPUT_BYTES;
 pub const REQUEST_MAX_AGE_MS: u64 = 30_000;
 pub const AUDIT_LIMIT_MIN: u8 = 1;
 pub const AUDIT_LIMIT_MAX: u8 = 25;
+pub const BOOKKEEPING_DESCRIPTION_MAX_BYTES: usize = 4096;
 pub const HOST_READY_MESSAGE: &str = "host_ready";
 pub const HOST_RESTART_MESSAGE: &str = "host_restart";
 pub const COMMAND_MESSAGE: &str = "command";
@@ -114,6 +115,15 @@ pub struct DebtParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BookkeepingDescriptionParams {
+    pub debt_uuid: String,
+    pub item_uuid: String,
+    pub description: String,
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UploadParams {
     pub debt_uuid: String,
     pub file_path: PathBuf,
@@ -145,6 +155,7 @@ pub enum Action {
     BookkeepingGet(DebtParams),
     BookkeepingCategories(EmptyParams),
     BookkeepingSuggestions(DebtParams),
+    BookkeepingSetDescription(BookkeepingDescriptionParams),
     AuditList(AuditListParams),
 }
 
@@ -160,6 +171,7 @@ impl Action {
             Self::BookkeepingGet(_) => "bookkeeping.get",
             Self::BookkeepingCategories(_) => "bookkeeping.categories",
             Self::BookkeepingSuggestions(_) => "bookkeeping.suggestions",
+            Self::BookkeepingSetDescription(_) => "bookkeeping.set-description",
             Self::AuditList(_) => "audit.list",
         }
     }
@@ -175,6 +187,7 @@ impl Action {
             | Self::BookkeepingSuggestions(params) => serde_json::to_value(params),
             Self::Upload(params) => serde_json::to_value(params),
             Self::AttachmentDelete(params) => serde_json::to_value(params),
+            Self::BookkeepingSetDescription(params) => serde_json::to_value(params),
             Self::AuditList(params) => serde_json::to_value(params),
         }
         .expect("action parameters serialize")
@@ -223,6 +236,16 @@ impl Action {
             "bookkeeping.categories" => Self::BookkeepingCategories(decode(params)?),
             "bookkeeping.suggestions" => {
                 Self::BookkeepingSuggestions(validated_debt_params(decode(params)?)?)
+            }
+            "bookkeeping.set-description" => {
+                let params: BookkeepingDescriptionParams = decode(params)?;
+                validate_uuid(&params.debt_uuid, "Debt")?;
+                validate_uuid(&params.item_uuid, "Item")?;
+                ensure!(
+                    params.description.len() <= BOOKKEEPING_DESCRIPTION_MAX_BYTES,
+                    "Bookkeeping description must be at most 4096 bytes."
+                );
+                Self::BookkeepingSetDescription(params)
             }
             "audit.list" => {
                 let params: AuditListParams = decode(params)?;
@@ -585,6 +608,24 @@ mod tests {
             ("bookkeeping.get", json!({"debtUuid": ""})),
             ("bookkeeping.categories", json!({"limit": 1})),
             ("bookkeeping.suggestions", json!({})),
+            (
+                "bookkeeping.set-description",
+                json!({
+                    "debtUuid": "11111111-1111-4111-8111-111111111111",
+                    "itemUuid": "not-a-uuid",
+                    "description": "replacement",
+                    "confirmed": false
+                }),
+            ),
+            (
+                "bookkeeping.set-description",
+                json!({
+                    "debtUuid": "11111111-1111-4111-8111-111111111111",
+                    "itemUuid": "22222222-2222-4222-8222-222222222222",
+                    "description": "x".repeat(BOOKKEEPING_DESCRIPTION_MAX_BYTES + 1),
+                    "confirmed": true
+                }),
+            ),
             ("audit.list", json!({"limit": 0})),
             ("audit.list", json!({"limit": 26})),
         ];
