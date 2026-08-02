@@ -53,6 +53,11 @@ install-dev:
 run *ARGS:
     cargo run -- "$@"
 
+# Synchronize every tracked build version before release validation
+_release-version version:
+    @bun scripts/sync-release-version.ts {{version}}
+    @bun run sync:artifacts
+
 # Internal release helper
 _release bump:
     @cargo-release {{bump}}
