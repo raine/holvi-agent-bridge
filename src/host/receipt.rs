@@ -4,8 +4,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
-use crate::config::{BridgeConfig, resolve_receipt_file};
+use crate::config::BridgeConfig;
 use crate::protocol::UploadParams;
+use crate::receipt_sandbox::resolve_receipt_file;
 
 const FILE_CHUNK_BYTES: usize = 480 * 1024;
 
@@ -15,7 +16,11 @@ pub async fn transfer(
     config: &BridgeConfig,
     native: &mpsc::Sender<Value>,
 ) -> Result<()> {
-    let receipt = resolve_receipt_file(config, &params.file_path)?;
+    let receipt = resolve_receipt_file(
+        &config.receipt_roots,
+        config.max_file_bytes,
+        &params.file_path,
+    )?;
     let bytes = tokio::fs::read(&receipt.path).await?;
     ensure!(
         bytes.len() as u64 == receipt.size,

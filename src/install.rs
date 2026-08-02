@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -12,9 +12,10 @@ use serde_json::json;
 
 use crate::config::{
     BridgeConfig, DEFAULT_MAX_FILE_BYTES, EXTENSION_ID, EXTENSION_ORIGIN, HOST_NAME,
-    SUPPORTED_CAPABILITIES, default_config_path, is_lower_hex, parse_group_url,
-    resolve_receipt_root, validate_uuid,
+    SUPPORTED_CAPABILITIES, default_config_path, is_lower_hex, parse_group_url, validate_uuid,
 };
+use crate::filesystem::{has_private_permissions, is_owned_by_current_user, is_regular_file};
+use crate::receipt_sandbox::resolve_receipt_root;
 
 const EXTENSION_FILES: [(&str, &[u8]); 4] = [
     (
@@ -167,11 +168,9 @@ fn chrome_manifest_directory() -> Result<PathBuf> {
 
 fn reusable_secret(path: &Path) -> Option<String> {
     let metadata = fs::symlink_metadata(path).ok()?;
-    // SAFETY: getuid has no preconditions and cannot fail.
-    let uid = unsafe { libc::getuid() };
-    if !metadata.file_type().is_file()
-        || metadata.permissions().mode() & 0o077 != 0
-        || metadata.uid() != uid
+    if !is_regular_file(&metadata)
+        || !has_private_permissions(&metadata)
+        || !is_owned_by_current_user(&metadata)
     {
         return None;
     }

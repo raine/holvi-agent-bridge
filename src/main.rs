@@ -1,9 +1,11 @@
 mod capabilities;
 mod cli;
 mod config;
+mod filesystem;
 mod host;
 mod install;
 mod protocol;
+mod receipt_sandbox;
 mod skill;
 
 use anyhow::Result;

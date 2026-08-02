@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 
 use super::LocalRequest;
+use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
 use crate::protocol::{MAX_SOCKET_REQUEST_BYTES, now_millis, verify_request};
 
 pub struct LocalSocket {
@@ -29,9 +30,7 @@ struct SocketGuard {
 impl Drop for SocketGuard {
     fn drop(&mut self) {
         if let Ok(metadata) = fs::symlink_metadata(&self.path) {
-            if metadata.file_type().is_socket()
-                && metadata.dev() == self.device
-                && metadata.ino() == self.inode
+            if is_socket(&metadata) && metadata.dev() == self.device && metadata.ino() == self.inode
             {
                 let _ = fs::remove_file(&self.path);
             }
@@ -46,6 +45,11 @@ impl LocalSocket {
             .with_context(|| format!("Unable to bind local bridge socket: {}", target.display()))?;
         fs::set_permissions(target, fs::Permissions::from_mode(0o600))?;
         let metadata = fs::symlink_metadata(target)?;
+        ensure!(
+            is_socket(&metadata) && is_owned_by_current_user(&metadata) && has_mode_0600(&metadata),
+            "Local bridge socket does not have the required ownership and 0600 permissions: {}",
+            target.display()
+        );
         let guard = SocketGuard {
             path: target.to_owned(),
             device: metadata.dev(),
@@ -121,14 +125,18 @@ async fn prepare(target: &Path) -> Result<()> {
         Err(error) => return Err(error.into()),
     };
     ensure!(
-        metadata.file_type().is_socket(),
+        is_socket(&metadata),
         "Refused to replace a non-socket path: {}",
         target.display()
     );
-    // SAFETY: getuid has no preconditions and cannot fail.
     ensure!(
-        metadata.uid() == unsafe { libc::getuid() },
+        is_owned_by_current_user(&metadata),
         "Refused to replace a socket owned by another user: {}",
+        target.display()
+    );
+    ensure!(
+        has_mode_0600(&metadata),
+        "Refused to replace a socket without 0600 permissions: {}",
         target.display()
     );
     if tokio::time::timeout(Duration::from_millis(300), UnixStream::connect(target))
@@ -246,6 +254,21 @@ mod tests {
         shutdown.send(()).unwrap();
         acceptor.await.unwrap().unwrap();
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn refuses_to_replace_sockets_without_mode_0600() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("bridge.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+
+        let error = match LocalSocket::bind(&path).await {
+            Ok(_) => panic!("permissive socket was replaced"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("without 0600 permissions"));
+        assert!(path.exists());
     }
 
     #[tokio::test]

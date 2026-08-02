@@ -1,13 +1,16 @@
 use std::collections::HashSet;
 use std::env;
 use std::fs;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail, ensure};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::filesystem::{
+    current_user_uid, has_private_permissions, is_owned_by_current_user, is_regular_file,
+};
 
 pub const EXTENSION_ID: &str = "oeedcemphbobfehfmcllmjhhhjgahgeb";
 pub const EXTENSION_ORIGIN: &str = "chrome-extension://oeedcemphbobfehfmcllmjhhhjgahgeb/";
@@ -42,15 +45,6 @@ pub struct PublicBridgeConfig<'a> {
     payment_account_uuid: &'a str,
     capabilities: &'a [String],
     max_file_bytes: u64,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ReceiptFile {
-    pub path: PathBuf,
-    pub file_name: String,
-    pub mime_type: &'static str,
-    pub size: u64,
 }
 
 impl BridgeConfig {
@@ -137,11 +131,7 @@ pub fn config_path() -> Result<PathBuf> {
 }
 
 pub fn socket_path() -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "holvi-agent-bridge-{}.sock",
-        // SAFETY: getuid has no preconditions and cannot fail.
-        unsafe { libc::getuid() }
-    ))
+    std::env::temp_dir().join(format!("holvi-agent-bridge-{}.sock", current_user_uid()))
 }
 
 pub fn load_config() -> Result<(BridgeConfig, PathBuf)> {
@@ -149,14 +139,12 @@ pub fn load_config() -> Result<(BridgeConfig, PathBuf)> {
     let metadata = fs::symlink_metadata(&path)
         .with_context(|| format!("Unable to read config metadata: {}", path.display()))?;
     ensure!(
-        metadata.file_type().is_file() && metadata.permissions().mode() & 0o077 == 0,
+        is_regular_file(&metadata) && has_private_permissions(&metadata),
         "Config must be a regular file with 0600 permissions: {}",
         path.display()
     );
-    // SAFETY: getuid has no preconditions and cannot fail.
-    let uid = unsafe { libc::getuid() };
     ensure!(
-        metadata.uid() == uid,
+        is_owned_by_current_user(&metadata),
         "Config must be owned by the current user: {}",
         path.display()
     );
@@ -212,70 +200,6 @@ pub fn validate_uuid<'a>(value: &'a str, label: &str) -> Result<&'a str> {
     Ok(value)
 }
 
-pub fn resolve_receipt_root(root: &Path) -> Result<PathBuf> {
-    ensure!(root.is_absolute(), "Receipt roots must be absolute paths.");
-    let resolved = fs::canonicalize(root)
-        .with_context(|| format!("Unable to resolve receipt root: {}", root.display()))?;
-    let metadata = fs::metadata(&resolved)?;
-    ensure!(
-        metadata.is_dir(),
-        "Receipt root must be a directory: {}",
-        root.display()
-    );
-    fs::read_dir(&resolved)
-        .with_context(|| format!("Receipt root must be readable: {}", root.display()))?;
-    Ok(resolved)
-}
-
-pub fn resolve_receipt_file(config: &BridgeConfig, file_path: &Path) -> Result<ReceiptFile> {
-    ensure!(file_path.is_absolute(), "Receipt path must be absolute.");
-    let candidate = fs::canonicalize(file_path)
-        .with_context(|| format!("Unable to resolve receipt path: {}", file_path.display()))?;
-    let roots = config
-        .receipt_roots
-        .iter()
-        .map(|root| resolve_receipt_root(root))
-        .collect::<Result<Vec<_>>>()?;
-    ensure!(
-        roots.iter().any(|root| candidate.starts_with(root)),
-        "Receipt path is outside the approved receipt folders."
-    );
-    let metadata = fs::metadata(&candidate)?;
-    ensure!(
-        metadata.is_file(),
-        "Receipt path must identify a regular file."
-    );
-    ensure!(
-        (1..=config.max_file_bytes).contains(&metadata.len()),
-        "Receipt size must be between 1 and {} bytes.",
-        config.max_file_bytes
-    );
-    fs::File::open(&candidate).context("Receipt file must be readable.")?;
-    let extension = candidate
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let mime_type = match extension.as_str() {
-        "pdf" => "application/pdf",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        _ => bail!("Receipt type must be PDF, PNG, JPEG, or GIF."),
-    };
-    let file_name = candidate
-        .file_name()
-        .and_then(|value| value.to_str())
-        .context("Receipt filename is not valid UTF-8.")?
-        .to_owned();
-    Ok(ReceiptFile {
-        path: candidate,
-        file_name,
-        mime_type,
-        size: metadata.len(),
-    })
-}
-
 pub fn is_lower_hex(value: &str, length: usize) -> bool {
     value.len() == length
         && value
@@ -285,10 +209,6 @@ pub fn is_lower_hex(value: &str, length: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::symlink;
-
-    use tempfile::tempdir;
-
     use super::*;
 
     fn config(roots: Vec<PathBuf>) -> BridgeConfig {
@@ -332,31 +252,5 @@ mod tests {
         let mut read_only = config(vec![]);
         read_only.capabilities = vec!["bookkeeping.read".into(), "audit.read".into()];
         assert!(read_only.validate().is_ok());
-    }
-
-    #[test]
-    fn blocks_receipt_symlink_escape() {
-        let temporary = tempdir().unwrap();
-        let approved = temporary.path().join("approved");
-        let outside = temporary.path().join("outside");
-        fs::create_dir(&approved).unwrap();
-        fs::create_dir(&outside).unwrap();
-        let receipt = approved.join("receipt.pdf");
-        let outside_receipt = outside.join("outside.pdf");
-        let escaped = approved.join("escaped.pdf");
-        fs::write(&receipt, b"%PDF-1.7\nreceipt\n").unwrap();
-        fs::write(&outside_receipt, b"%PDF-1.7\noutside\n").unwrap();
-        symlink(&outside_receipt, &escaped).unwrap();
-
-        let resolved = resolve_receipt_file(&config(vec![approved]), &receipt).unwrap();
-        assert_eq!(resolved.path, fs::canonicalize(receipt).unwrap());
-        assert_eq!(resolved.mime_type, "application/pdf");
-        assert!(
-            resolve_receipt_file(
-                &config(vec![resolved.path.parent().unwrap().to_path_buf()]),
-                &escaped
-            )
-            .is_err()
-        );
     }
 }

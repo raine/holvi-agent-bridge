@@ -1,7 +1,6 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::time::Duration;
@@ -15,11 +14,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 use crate::capabilities::enabled_actions;
-use crate::config::{config_path, load_config, resolve_receipt_file, socket_path, validate_uuid};
+use crate::config::{config_path, load_config, socket_path, validate_uuid};
+use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
 use crate::install::{InstallOptions, install_bridge};
 use crate::protocol::{
     Action, AuditListParams, DebtParams, EmptyParams, TransactionParams, UploadParams, sign_request,
 };
+use crate::receipt_sandbox::resolve_receipt_file;
 use crate::skill::{self, CodingAgentArg};
 
 const HELP_AFTER: &str =
@@ -266,7 +267,8 @@ pub async fn run() -> Result<()> {
         }
         Command::Upload(args) => {
             validate_uuid(&args.debt, "Debt")?;
-            let receipt = resolve_receipt_file(&config, &args.file)?;
+            let receipt =
+                resolve_receipt_file(&config.receipt_roots, config.max_file_bytes, &args.file)?;
             if args.yes {
                 print_json(
                     &request_host(
@@ -393,12 +395,9 @@ async fn request_host(secret: &str, action: Action) -> Result<Value> {
         }
         Err(error) => return Err(error.into()),
     };
-    // SAFETY: getuid has no preconditions and cannot fail.
     ensure!(
-        metadata.file_type().is_socket()
-            && metadata.permissions().mode() & 0o077 == 0
-            && metadata.uid() == unsafe { libc::getuid() },
-        "The local bridge socket failed its ownership checks."
+        is_socket(&metadata) && has_mode_0600(&metadata) && is_owned_by_current_user(&metadata),
+        "The local bridge socket failed its ownership and permission checks."
     );
 
     let request = sign_request(secret, action)?;
