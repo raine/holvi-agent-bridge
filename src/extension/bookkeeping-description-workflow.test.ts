@@ -40,6 +40,7 @@ function lineItem(uuid: string, description: string) {
     type: "line_item",
     active: true,
     description,
+    timestamp: "2026-08-02T10:00:00Z",
     category: "4000",
     cost_center_uuid: null,
     vat_calculation_rule: "gross",
@@ -189,6 +190,27 @@ describe("bookkeeping description workflow", () => {
         { ...(before.items[0] as object), description: "Replacement" },
         before.items[1],
       ],
+    });
+  });
+
+  test("allows Holvi to update the target item timestamp", async () => {
+    const before = debt();
+    const after = debt("Replacement");
+    after.items[0] = {
+      ...lineItem(targetUuid, "Replacement"),
+      timestamp: "2026-08-02T10:01:00Z",
+    };
+    const responses = [
+      jsonResponse(before),
+      jsonResponse({}),
+      jsonResponse(after),
+    ];
+    const workflow = setup(async () => responses.shift()!);
+
+    await expect(workflow.change(auth, change(true))).resolves.toMatchObject({
+      proposedDescription: "Replacement",
+      writePerformed: true,
+      verified: true,
     });
   });
 

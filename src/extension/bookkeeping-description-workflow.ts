@@ -162,9 +162,10 @@ function verifyCriticalDebtFields(before: JsonRecord, after: JsonRecord): void {
   }
 }
 
-function withoutDescription(item: JsonRecord): JsonRecord {
+function withoutMutableTargetFields(item: JsonRecord): JsonRecord {
   const copy = { ...item };
   delete copy.description;
+  delete copy.timestamp;
   return copy;
 }
 
@@ -271,8 +272,8 @@ function verifyItems(
           "Bookkeeping verification found an unexpected description.",
         );
       }
-      const expectedFields = withoutDescription(expectedItem);
-      const actualFields = withoutDescription(actualItem);
+      const expectedFields = withoutMutableTargetFields(expectedItem);
+      const actualFields = withoutMutableTargetFields(actualItem);
       if (canonicalJson(expectedFields) !== canonicalJson(actualFields)) {
         const changes = changedFieldPaths(expectedFields, actualFields);
         const omitted = changes.truncated
