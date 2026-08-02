@@ -14,6 +14,9 @@ import {
   projectCommentPage,
   projectDebtPreview,
   projectSuggestions,
+  projectTransactionAccount,
+  projectTransactionCard,
+  projectTransactionDetailDebt,
   projectTransactionFeedPage,
   projectUploadDebtRead,
 } from "./projections.js";
@@ -180,6 +183,15 @@ describe("transaction projections", () => {
       }),
     ).toThrow("nonnegative integer");
 
+    malformed.attachment_count = 1;
+    malformed.matches.push({ match_type: "direct", uuid: itemUuid });
+    expect(() =>
+      projectTransactionFeedPage({
+        results: [malformed],
+        pagination: { has_more: false },
+      }),
+    ).toThrow("ambiguous direct debt matches");
+
     expect(() =>
       projectTransactionFeedPage({
         results: [],
@@ -207,6 +219,145 @@ describe("transaction projections", () => {
         pagination: { has_more: false },
       }),
     ).toThrow("result limit");
+  });
+});
+
+describe("transaction detail projections", () => {
+  const detailDebt = {
+    ...debt(),
+    currency: "EUR",
+    links: { card_profile: "55555555-5555-4555-8555-555555555555" },
+    creator: { displayname: "Example Cardholder" },
+    currency_conversion: {
+      counterparty_amount: "27.20",
+      counterparty_currency: "USD",
+      rate: "1.09677",
+    },
+    receiver: {
+      merchant_info: {
+        category: "Office Supplies",
+        payment_type: "POS",
+        address: {
+          street: "Example street 1",
+          postcode: "00100",
+          city: "Helsinki",
+          country: "FI",
+        },
+      },
+    },
+  };
+
+  test("projects UI payment fields from the account-scoped debt", () => {
+    expect(
+      projectTransactionDetailDebt(detailDebt, debtUuid, paymentAccountUuid),
+    ).toEqual({
+      debtUuid,
+      paymentAccountUuid,
+      cardProfileUuid: "55555555-5555-4555-8555-555555555555",
+      cardholder: "Example Cardholder",
+      exchangeRate: {
+        baseCurrency: "EUR",
+        counterpartyCurrency: "USD",
+        counterpartyAmount: "27.20",
+        rate: "1.09677",
+      },
+      merchantAddress: {
+        street: "Example street 1",
+        postcode: "00100",
+        city: "Helsinki",
+        country: "FI",
+      },
+      merchantCategory: "Office Supplies",
+      paymentType: "POS",
+    });
+  });
+
+  test("projects only the configured account and card last four", () => {
+    expect(
+      projectTransactionAccount(
+        {
+          paymentaccounts: [
+            {
+              uuid: paymentAccountUuid,
+              name: "Main account",
+              iban: "FI0012345600000785",
+              currency: "EUR",
+            },
+          ],
+        },
+        paymentAccountUuid,
+      ),
+    ).toEqual({
+      paymentAccountUuid,
+      name: "Main account",
+      iban: "FI00 •••• 0785",
+      currency: "EUR",
+    });
+    expect(
+      projectTransactionCard(
+        {
+          uuid: "55555555-5555-4555-8555-555555555555",
+          payment_account_uuid: paymentAccountUuid,
+          name: "Team card",
+          masked_pan: "**** **** **** 1533",
+        },
+        "55555555-5555-4555-8555-555555555555",
+        paymentAccountUuid,
+      ),
+    ).toEqual({
+      cardProfileUuid: "55555555-5555-4555-8555-555555555555",
+      lastFour: "1533",
+    });
+  });
+
+  test("rejects identity mismatches, ambiguous accounts, and malformed cards", () => {
+    expect(() =>
+      projectTransactionDetailDebt(
+        { ...detailDebt, payment_account_uuid: itemUuid },
+        debtUuid,
+        paymentAccountUuid,
+      ),
+    ).toThrow("outside the configured payment account");
+    expect(() =>
+      projectTransactionDetailDebt(
+        { ...detailDebt, currency_conversion: { rate: "1.1" } },
+        debtUuid,
+        paymentAccountUuid,
+      ),
+    ).toThrow("Exchange counterparty currency");
+    expect(() =>
+      projectTransactionAccount(
+        {
+          paymentaccounts: [
+            {
+              uuid: paymentAccountUuid,
+              name: "One",
+              iban: "FI001",
+              currency: "EUR",
+            },
+            {
+              uuid: paymentAccountUuid,
+              name: "Duplicate",
+              iban: "FI002",
+              currency: "EUR",
+            },
+          ],
+        },
+        paymentAccountUuid,
+      ),
+    ).toThrow("one configured payment account");
+    expect(() =>
+      projectTransactionCard(
+        {
+          uuid: "55555555-5555-4555-8555-555555555555",
+          payment_account_uuid: paymentAccountUuid,
+          name: "Team card",
+          masked_pan: "not masked",
+        },
+        "55555555-5555-4555-8555-555555555555",
+        paymentAccountUuid,
+      ),
+    ).toThrow("invalid masked PAN");
   });
 });
 

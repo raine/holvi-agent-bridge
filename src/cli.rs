@@ -14,10 +14,12 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
+use url::Url;
 
 use crate::capabilities::{EnabledActions, enabled_actions};
 use crate::config::{
-    BridgeConfig, SUPPORTED_CAPABILITIES, config_path, load_config, socket_path, validate_uuid,
+    ACCOUNT_ORIGIN, BridgeConfig, SUPPORTED_CAPABILITIES, config_path, load_config, socket_path,
+    validate_uuid,
 };
 use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
 use crate::install::{HostRestartStatus, InstallOptions, InstallResult, install_bridge};
@@ -173,7 +175,7 @@ struct TransactionsArgs {
 enum TransactionCommand {
     /// List payment-account transactions
     List(TransactionArgs),
-    /// Inspect one transaction's accounting record
+    /// Inspect one transaction's payment details
     Get(DebtArgs),
     /// Read or create internal transaction comments
     Comments {
@@ -192,7 +194,7 @@ enum CommentCommand {
 
 #[derive(Args)]
 struct CommentCreateArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "DEBT_OR_PAYMENT_URL")]
     debt: String,
     #[arg(long, value_parser = parse_comment_content)]
     content: String,
@@ -214,13 +216,14 @@ struct TransactionArgs {
 
 #[derive(Args)]
 struct DebtArgs {
-    #[arg(long)]
+    /// Debt UUID or exact payment-page URL for the configured Holvi group
+    #[arg(long, value_name = "DEBT_OR_PAYMENT_URL")]
     debt: String,
 }
 
 #[derive(Args)]
 struct UploadArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "DEBT_OR_PAYMENT_URL")]
     debt: String,
     #[arg(long)]
     file: PathBuf,
@@ -231,7 +234,7 @@ struct UploadArgs {
 #[derive(Args)]
 struct AttachmentDeleteArgs {
     /// Debt that owns the attachment
-    #[arg(long)]
+    #[arg(long, value_name = "DEBT_OR_PAYMENT_URL")]
     debt: String,
     /// Exact attachment code from the debt preview
     #[arg(long)]
@@ -243,7 +246,7 @@ struct AttachmentDeleteArgs {
 
 #[derive(Args)]
 struct BookkeepingDescriptionArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "DEBT_OR_PAYMENT_URL")]
     debt: String,
     #[arg(long)]
     item: String,
@@ -379,38 +382,34 @@ pub async fn run() -> Result<()> {
                 }
             }
             TransactionCommand::Get(args) => {
-                validate_uuid(&args.debt, "Debt")?;
+                let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
                 print_json(
                     &request_host(
                         &config.hmac_secret,
-                        Action::DebtGet(DebtParams {
-                            debt_uuid: args.debt,
-                        }),
+                        Action::TransactionsGet(DebtParams { debt_uuid }),
                     )
                     .await?,
                 )?;
             }
             TransactionCommand::Comments { command } => match command {
                 CommentCommand::List(args) => {
-                    validate_uuid(&args.debt, "Debt")?;
+                    let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
                     print_json(
                         &request_host(
                             &config.hmac_secret,
-                            Action::CommentsList(DebtParams {
-                                debt_uuid: args.debt,
-                            }),
+                            Action::CommentsList(DebtParams { debt_uuid }),
                         )
                         .await?,
                     )?;
                 }
                 CommentCommand::Create(args) => {
-                    validate_uuid(&args.debt, "Debt")?;
+                    let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
                     if args.yes {
                         print_json(
                             &request_host(
                                 &config.hmac_secret,
                                 Action::CommentsCreate(CommentCreateParams {
-                                    debt_uuid: args.debt,
+                                    debt_uuid,
                                     content: args.content,
                                     confirmed: true,
                                 }),
@@ -420,9 +419,7 @@ pub async fn run() -> Result<()> {
                     } else {
                         let preview = request_host(
                             &config.hmac_secret,
-                            Action::DebtGet(DebtParams {
-                                debt_uuid: args.debt,
-                            }),
+                            Action::DebtGet(DebtParams { debt_uuid }),
                         )
                         .await?;
                         print_json(&comment_dry_run(preview, args.content))?;
@@ -432,7 +429,7 @@ pub async fn run() -> Result<()> {
         },
         Command::Attachments { command } => match command {
             AttachmentsCommand::Upload(args) => {
-                validate_uuid(&args.debt, "Debt")?;
+                let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
                 let receipt =
                     resolve_receipt_file(&config.receipt_roots, config.max_file_bytes, &args.file)?;
                 if args.yes {
@@ -440,7 +437,7 @@ pub async fn run() -> Result<()> {
                         &request_host(
                             &config.hmac_secret,
                             Action::AttachmentUpload(UploadParams {
-                                debt_uuid: args.debt,
+                                debt_uuid,
                                 file_path: receipt.path,
                                 confirmed: true,
                             }),
@@ -450,9 +447,7 @@ pub async fn run() -> Result<()> {
                 } else {
                     let debt = request_host(
                         &config.hmac_secret,
-                        Action::DebtGet(DebtParams {
-                            debt_uuid: args.debt,
-                        }),
+                        Action::DebtGet(DebtParams { debt_uuid }),
                     )
                     .await?;
                     print_json(&json!({
@@ -464,13 +459,13 @@ pub async fn run() -> Result<()> {
                 }
             }
             AttachmentsCommand::Delete(args) => {
-                validate_uuid(&args.debt, "Debt")?;
+                let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
                 validate_attachment_code(&args.attachment)?;
                 print_json(
                     &request_host(
                         &config.hmac_secret,
                         Action::AttachmentDelete(AttachmentDeleteParams {
-                            debt_uuid: args.debt,
+                            debt_uuid,
                             attachment_code: args.attachment,
                             confirmed: args.yes,
                         }),
@@ -481,13 +476,11 @@ pub async fn run() -> Result<()> {
         },
         Command::Bookkeeping { command } => match command {
             BookkeepingCommand::Get(args) => {
-                validate_uuid(&args.debt, "Debt")?;
+                let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
                 print_json(
                     &request_host(
                         &config.hmac_secret,
-                        Action::BookkeepingGet(DebtParams {
-                            debt_uuid: args.debt,
-                        }),
+                        Action::BookkeepingGet(DebtParams { debt_uuid }),
                     )
                     .await?,
                 )?;
@@ -502,25 +495,23 @@ pub async fn run() -> Result<()> {
                 )?;
             }
             BookkeepingCommand::Suggestions(args) => {
-                validate_uuid(&args.debt, "Debt")?;
+                let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
                 print_json(
                     &request_host(
                         &config.hmac_secret,
-                        Action::BookkeepingSuggestions(DebtParams {
-                            debt_uuid: args.debt,
-                        }),
+                        Action::BookkeepingSuggestions(DebtParams { debt_uuid }),
                     )
                     .await?,
                 )?;
             }
             BookkeepingCommand::SetDescription(args) => {
-                validate_uuid(&args.debt, "Debt")?;
+                let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
                 validate_uuid(&args.item, "Item")?;
                 print_json(
                     &request_host(
                         &config.hmac_secret,
                         Action::BookkeepingSetDescription(BookkeepingDescriptionParams {
-                            debt_uuid: args.debt,
+                            debt_uuid,
                             item_uuid: args.item,
                             description: args.description,
                             confirmed: args.yes,
@@ -598,6 +589,40 @@ fn parse_comment_content(value: &str) -> std::result::Result<String, String> {
         ));
     }
     Ok(value.to_owned())
+}
+
+fn parse_debt_target(value: &str, configured_group: &str) -> Result<String> {
+    if validate_uuid(value, "Debt").is_ok() {
+        return Ok(value.to_owned());
+    }
+
+    let url = Url::parse(value)
+        .context("Transaction target must be a debt UUID or an exact Holvi payment-page URL.")?;
+    ensure!(
+        url.origin().ascii_serialization() == ACCOUNT_ORIGIN
+            && url.username().is_empty()
+            && url.password().is_none(),
+        "Holvi payment-page URL must use {ACCOUNT_ORIGIN}."
+    );
+    ensure!(
+        url.query().is_none() && url.fragment().is_none(),
+        "Holvi payment-page URL must not contain a query or fragment."
+    );
+    let segments = url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())
+        .unwrap_or_default();
+    ensure!(
+        segments.len() == 5
+            && segments[0] == "group"
+            && segments[1] == configured_group
+            && segments[2] == "payment"
+            && segments[4].is_empty(),
+        "Holvi payment-page URL must target the configured group and one payment debt."
+    );
+    let debt_uuid = segments[3];
+    validate_uuid(debt_uuid, "Debt")?;
+    Ok(debt_uuid.to_owned())
 }
 
 fn parse_date(value: &str) -> std::result::Result<String, String> {
@@ -1241,6 +1266,42 @@ mod tests {
             "Holvi Agent Bridge response is too large."
         );
         writer.await.unwrap();
+    }
+
+    #[test]
+    fn accepts_debt_uuids_and_exact_configured_payment_page_urls() {
+        let debt_uuid = "11111111-1111-4111-8111-111111111111";
+        let group = "AbC123+example-company";
+        assert_eq!(parse_debt_target(debt_uuid, group).unwrap(), debt_uuid);
+        assert_eq!(
+            parse_debt_target(
+                &format!("{ACCOUNT_ORIGIN}/group/{group}/payment/{debt_uuid}/"),
+                group,
+            )
+            .unwrap(),
+            debt_uuid,
+        );
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_out_of_scope_payment_page_urls() {
+        let debt_uuid = "11111111-1111-4111-8111-111111111111";
+        let group = "AbC123+example-company";
+        let invalid = [
+            format!("https://example.com/group/{group}/payment/{debt_uuid}/"),
+            format!("{ACCOUNT_ORIGIN}/group/other+company/payment/{debt_uuid}/"),
+            format!("{ACCOUNT_ORIGIN}/group/{group}/payments/{debt_uuid}/"),
+            format!("{ACCOUNT_ORIGIN}/group/{group}/payment/{debt_uuid}"),
+            format!("{ACCOUNT_ORIGIN}/group/{group}/payment/{debt_uuid}/extra/"),
+            format!("{ACCOUNT_ORIGIN}/group/{group}/payment/{debt_uuid}/?uuid={debt_uuid}"),
+            format!("{ACCOUNT_ORIGIN}/group/{group}/payment/{debt_uuid}/#details"),
+        ];
+        for value in invalid {
+            assert!(
+                parse_debt_target(&value, group).is_err(),
+                "accepted invalid target {value}"
+            );
+        }
     }
 
     #[test]

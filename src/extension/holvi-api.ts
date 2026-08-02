@@ -6,6 +6,10 @@ import {
   projectCommentPage,
   projectDebtPreview,
   projectSuggestions,
+  projectTransactionAccount,
+  projectTransactionCard,
+  projectTransactionDetailDebt,
+  projectTransactionDetails,
   projectTransactionFeedPage,
   projectTransactionListing,
 } from "./projections.js";
@@ -163,6 +167,12 @@ export class HolviApi {
     )}/`;
   }
 
+  cardPath(cardProfileUuid: string): string {
+    return `${this.session.apiRoot()}cardprofile/${encodeURIComponent(
+      validateUuid(cardProfileUuid, "card profile"),
+    )}/`;
+  }
+
   commentPath(debtUuid: string): string {
     return `${this.debtPath(debtUuid)}comment/`;
   }
@@ -241,6 +251,93 @@ export class HolviApi {
       count: results.length,
       missingAttachments,
       results,
+    });
+  }
+
+  private async paymentUuidForDebt(
+    auth: Auth,
+    debtUuid: string,
+  ): Promise<string | null> {
+    const seenCursors = new Set<string>();
+    let cursor = "";
+    let pages = 0;
+    let results = 0;
+
+    do {
+      const page = await this.transactionFeedPage(auth, cursor);
+      pages += 1;
+      results += page.results.length;
+      if (results > this.staticConfig.maxTransactionResults) {
+        throw new Error("The transaction lookup exceeded its result limit.");
+      }
+      const matches = page.results.filter(
+        (item) =>
+          typeof item.debtUuid === "string" &&
+          item.debtUuid.toLowerCase() === debtUuid.toLowerCase(),
+      );
+      if (matches.length > 1) {
+        throw new Error("Holvi returned an ambiguous payment match.");
+      }
+      if (matches.length === 1) {
+        return asString(matches[0]?.paymentUuid) || null;
+      }
+      if (pages >= this.staticConfig.maxTransactionPages && page.hasMore) {
+        throw new Error("The transaction lookup exceeded its page limit.");
+      }
+      cursor = page.nextCursor;
+      if (cursor && seenCursors.has(cursor)) {
+        throw new Error("Holvi repeated a pagination cursor.");
+      }
+      seenCursors.add(cursor);
+    } while (cursor);
+
+    return null;
+  }
+
+  async transactionDetails(
+    auth: Auth,
+    debtUuid: string,
+  ): Promise<Record<string, unknown>> {
+    const validUuid = validateUuid(debtUuid, "debt");
+    const paymentAccountUuid = this.session.config.paymentAccountUuid;
+    const debtValue = await this.request(auth, this.debtPath(validUuid));
+    const debt = projectTransactionDetailDebt(
+      debtValue,
+      validUuid,
+      paymentAccountUuid,
+    );
+    const preview = projectDebtPreview(
+      debtValue,
+      validUuid,
+      paymentAccountUuid,
+    );
+    const [paymentUuid, account, card] = await Promise.all([
+      this.paymentUuidForDebt(auth, validUuid),
+      this.request(auth, this.session.apiRoot()).then((value) =>
+        projectTransactionAccount(value, paymentAccountUuid),
+      ),
+      debt.cardProfileUuid
+        ? this.request(auth, this.cardPath(debt.cardProfileUuid)).then(
+            (value) =>
+              projectTransactionCard(
+                value,
+                debt.cardProfileUuid as string,
+                paymentAccountUuid,
+              ),
+          )
+        : Promise.resolve(null),
+    ]);
+    return projectTransactionDetails({
+      ...preview,
+      paymentUuid,
+      debtUuid: debt.debtUuid,
+      card,
+      account,
+      cardholder: debt.cardholder,
+      exchangeRate: debt.exchangeRate,
+      merchantAddress: debt.merchantAddress,
+      merchantCategory: debt.merchantCategory,
+      paymentType: debt.paymentType,
     });
   }
 

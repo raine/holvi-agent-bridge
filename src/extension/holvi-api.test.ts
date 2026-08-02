@@ -135,6 +135,112 @@ describe("Holvi API boundary", () => {
     await api.request(auth, `${session.apiRoot()}category/`);
   });
 
+  test("reads purpose-built transaction details within the configured account", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const cardProfileUuid = "55555555-5555-4555-8555-555555555555";
+    const paymentUuid = "33333333-3333-4333-8333-333333333333";
+    const urls: string[] = [];
+    const api = new HolviApi(staticConfig, session, async (input) => {
+      const url = requestUrl(input);
+      urls.push(url);
+      if (url.endsWith(`/debt/${debtUuid}/`)) {
+        return jsonResponse({
+          ...debt(),
+          currency: "EUR",
+          links: { card_profile: cardProfileUuid },
+          creator: { displayname: "Example Cardholder" },
+          currency_conversion: {
+            counterparty_amount: "27.20",
+            counterparty_currency: "USD",
+            rate: "1.09677",
+          },
+          receiver: {
+            merchant_info: {
+              category: "Office Supplies",
+              payment_type: "POS",
+              address: { city: "Helsinki", country: "FI" },
+            },
+          },
+        });
+      }
+      if (url.includes("/ux/payments-feed/")) {
+        return jsonResponse({
+          results: [
+            {
+              ...payment(paymentUuid, "2026-08-02T10:15:00Z"),
+              matches: [{ match_type: "direct", uuid: debtUuid }],
+            },
+          ],
+          pagination: { has_more: false },
+        });
+      }
+      if (url.endsWith(`/cardprofile/${cardProfileUuid}/`)) {
+        return jsonResponse({
+          uuid: cardProfileUuid,
+          payment_account_uuid: runtimeConfig.paymentAccountUuid,
+          name: "Team card",
+          masked_pan: "**** **** **** 1533",
+        });
+      }
+      if (url.endsWith("/api/pool/example/")) {
+        return jsonResponse({
+          paymentaccounts: [
+            {
+              uuid: runtimeConfig.paymentAccountUuid,
+              name: "Main account",
+              iban: "FI0012345600000785",
+              currency: "EUR",
+            },
+          ],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    await expect(api.transactionDetails(auth, debtUuid)).resolves.toMatchObject(
+      {
+        paymentUuid,
+        debtUuid,
+        card: {
+          cardProfileUuid,
+          lastFour: "1533",
+        },
+        account: {
+          paymentAccountUuid: runtimeConfig.paymentAccountUuid,
+          name: "Main account",
+          iban: "FI00 •••• 0785",
+          currency: "EUR",
+        },
+        cardholder: "Example Cardholder",
+        exchangeRate: {
+          baseCurrency: "EUR",
+          counterpartyCurrency: "USD",
+          counterpartyAmount: "27.20",
+          rate: "1.09677",
+        },
+        merchantAddress: {
+          street: null,
+          postcode: null,
+          city: "Helsinki",
+          country: "FI",
+        },
+        merchantCategory: "Office Supplies",
+        paymentType: "POS",
+      },
+    );
+    expect(urls).toEqual(
+      expect.arrayContaining([
+        `https://holvi.com/api/pool/example/debt/${debtUuid}/`,
+        `https://holvi.com/api/pool/example/cardprofile/${cardProfileUuid}/`,
+        "https://holvi.com/api/pool/example/",
+      ]),
+    );
+    expect(urls.find((url) => url.includes("payments-feed"))).toContain(
+      `payment_account=${runtimeConfig.paymentAccountUuid}`,
+    );
+  });
+
   test("rejects transaction preview from another payment account", async () => {
     const session = new BridgeSession(staticConfig);
     session.configure(runtimeConfig);

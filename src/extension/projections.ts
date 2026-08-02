@@ -9,6 +9,7 @@ const maxAuditResults = 25;
 const maxAuditEnvelopeResults = 200;
 const maxFeedPageResults = 10_000;
 const maxPaymentMatches = 1000;
+const maxPaymentAccounts = 100;
 export const maxDebtAttachments = 1000;
 const maxCommentPageResults = 25;
 const maxCommentResults = 1000;
@@ -72,6 +73,14 @@ function decimal(value: unknown, label: string): string | number | null {
     return value;
   }
   throw new Error(`${label} has an invalid decimal value.`);
+}
+
+function requiredDecimal(value: unknown, label: string): string | number {
+  const result = decimal(value, label);
+  if (result === null) {
+    throw new Error(`${label} is required.`);
+  }
+  return result;
 }
 
 function price(
@@ -162,7 +171,10 @@ function directDebtUuid(value: unknown): string | null {
   for (const entry of matches) {
     const match = record(entry, "Payment match");
     const matchType = optionalString(match.match_type, "Payment match type");
-    if (matchType === "direct" && direct === null) {
+    if (matchType === "direct") {
+      if (direct !== null) {
+        throw new Error("Payment has ambiguous direct debt matches.");
+      }
       direct = match;
     }
   }
@@ -241,6 +253,185 @@ export function projectTransactionFeedPage(value: unknown): {
 
 export function projectTransactionListing<T>(value: T): T {
   return projection(value);
+}
+
+export interface TransactionDetailDebt {
+  debtUuid: string;
+  paymentAccountUuid: string;
+  cardProfileUuid: string | null;
+  cardholder: string | null;
+  exchangeRate: JsonRecord | null;
+  merchantAddress: JsonRecord | null;
+  merchantCategory: string | null;
+  paymentType: string | null;
+}
+
+export function projectTransactionDetailDebt(
+  value: unknown,
+  debtUuid: string,
+  paymentAccountUuid: string,
+): TransactionDetailDebt {
+  const debt = record(value, "Transaction detail debt");
+  const requestedUuid = uuid(debtUuid, "Debt UUID");
+  const responseUuid = uuid(debt.uuid, "Transaction detail debt UUID");
+  if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
+    throw new Error(
+      "Holvi transaction detail debt UUID does not match the request.",
+    );
+  }
+  const configuredAccount = uuid(
+    paymentAccountUuid,
+    "Configured payment account UUID",
+  );
+  const responseAccount = uuid(
+    debt.payment_account_uuid,
+    "Transaction detail payment account UUID",
+  );
+  if (responseAccount.toLowerCase() !== configuredAccount.toLowerCase()) {
+    throw new Error(
+      "Holvi transaction detail debt is outside the configured payment account.",
+    );
+  }
+
+  const links = optionalRecord(debt.links, "Transaction detail links");
+  const receiver = optionalRecord(debt.receiver, "Transaction detail receiver");
+  const merchant = optionalRecord(
+    receiver.merchant_info,
+    "Transaction detail merchant",
+  );
+  const address = optionalRecord(
+    merchant.address,
+    "Transaction detail merchant address",
+  );
+  const merchantAddress = {
+    street: optionalString(address.street, "Merchant address street"),
+    postcode: optionalString(address.postcode, "Merchant address postcode"),
+    city: optionalString(address.city, "Merchant address city"),
+    country: optionalString(address.country, "Merchant address country"),
+  };
+  const conversion = optionalRecord(
+    debt.currency_conversion,
+    "Transaction detail currency conversion",
+  );
+  const exchangeRate = Object.keys(conversion).length
+    ? {
+        baseCurrency: boundedString(debt.currency, "Payment currency"),
+        counterpartyCurrency: boundedString(
+          conversion.counterparty_currency,
+          "Exchange counterparty currency",
+        ),
+        counterpartyAmount: requiredDecimal(
+          conversion.counterparty_amount,
+          "Exchange counterparty amount",
+        ),
+        rate: requiredDecimal(conversion.rate, "Exchange rate"),
+      }
+    : null;
+  const creator = optionalRecord(debt.creator, "Transaction detail creator");
+  const cardProfileUuid = optionalUuid(
+    links.card_profile,
+    "Transaction detail card profile UUID",
+  );
+
+  return projection({
+    debtUuid: requestedUuid,
+    paymentAccountUuid: responseAccount,
+    cardProfileUuid,
+    cardholder: cardProfileUuid
+      ? optionalString(creator.displayname, "Transaction detail cardholder")
+      : null,
+    exchangeRate,
+    merchantAddress: Object.values(merchantAddress).some(Boolean)
+      ? merchantAddress
+      : null,
+    merchantCategory: optionalString(
+      merchant.category,
+      "Transaction detail merchant category",
+    ),
+    paymentType: optionalString(
+      merchant.payment_type,
+      "Transaction detail payment type",
+    ),
+  });
+}
+
+export function projectTransactionAccount(
+  value: unknown,
+  paymentAccountUuid: string,
+): JsonRecord {
+  const pool = record(value, "Pool account response");
+  const requestedUuid = uuid(
+    paymentAccountUuid,
+    "Configured payment account UUID",
+  );
+  const accounts = boundedArray(
+    pool.paymentaccounts,
+    "Pool payment accounts",
+    maxPaymentAccounts,
+  );
+  const matches = accounts.filter((entry) => {
+    const account = record(entry, "Pool payment account");
+    return (
+      uuid(account.uuid, "Pool payment account UUID").toLowerCase() ===
+      requestedUuid.toLowerCase()
+    );
+  });
+  if (matches.length !== 1) {
+    throw new Error(
+      "Holvi pool response did not contain one configured payment account.",
+    );
+  }
+  const account = record(matches[0], "Configured payment account");
+  const iban = boundedString(account.iban, "Payment account IBAN");
+  if (iban.length < 8 || iban.length > 64 || !/^[a-z0-9]+$/i.test(iban)) {
+    throw new Error("Payment account IBAN has an unexpected shape.");
+  }
+  return projection({
+    paymentAccountUuid: requestedUuid,
+    name: boundedString(account.name, "Payment account name"),
+    iban: `${iban.slice(0, 4)} •••• ${iban.slice(-4)}`,
+    currency: boundedString(account.currency, "Payment account currency"),
+  });
+}
+
+export function projectTransactionCard(
+  value: unknown,
+  cardProfileUuid: string,
+  paymentAccountUuid: string,
+): JsonRecord {
+  const card = record(value, "Transaction card profile");
+  const requestedCard = uuid(cardProfileUuid, "Card profile UUID");
+  const responseCard = uuid(card.uuid, "Transaction card profile UUID");
+  if (responseCard.toLowerCase() !== requestedCard.toLowerCase()) {
+    throw new Error("Holvi card profile UUID does not match the debt link.");
+  }
+  const requestedAccount = uuid(
+    paymentAccountUuid,
+    "Configured payment account UUID",
+  );
+  const responseAccount = uuid(
+    card.payment_account_uuid,
+    "Card payment account UUID",
+  );
+  if (responseAccount.toLowerCase() !== requestedAccount.toLowerCase()) {
+    throw new Error(
+      "Holvi card profile is outside the configured payment account.",
+    );
+  }
+  const maskedPan = boundedString(card.masked_pan, "Card masked PAN");
+  const lastFour =
+    maskedPan.length <= 64 ? maskedPan.match(/(\d{4})$/)?.[1] : undefined;
+  if (!lastFour) {
+    throw new Error("Holvi card profile has an invalid masked PAN.");
+  }
+  return projection({
+    cardProfileUuid: requestedCard,
+    lastFour,
+  });
+}
+
+export function projectTransactionDetails(value: unknown): JsonRecord {
+  return projection(record(value, "Transaction details"));
 }
 
 function attachmentCode(value: unknown): string {

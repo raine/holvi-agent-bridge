@@ -39,7 +39,15 @@ for Holvi work. Authentication stays inside Chrome.
 ## Transaction identifiers
 
 - Transaction JSON keeps `paymentUuid` and `debtUuid` separate.
-- Use `debtUuid` with `transactions get`, transaction comments, `attachments upload`,
+- Holvi's `/group/{group}/payment/{uuid}/` page contains `debtUuid`, despite the
+  route name. Never treat that route value as `paymentUuid`.
+- Pass the full payment-page URL to `--debt` whenever the user supplies it or it
+  is otherwise available. Preserve the URL intact instead of extracting and
+  guessing which identifier it contains. The CLI strictly checks the
+  `account.app.holvi.com` origin, configured group, exact payment path, trailing
+  slash, and absence of a query or fragment.
+- A plain `debtUuid` from trusted `holvi transactions list --json` output is also
+  accepted by `transactions get`, transaction comments, `attachments upload`,
   `attachments delete`, `bookkeeping get`, `bookkeeping suggestions`, and
   `bookkeeping set-description`. Use an active line item's `itemUuid` for
   `bookkeeping set-description`. Never substitute `paymentUuid`.
@@ -51,23 +59,28 @@ for Holvi work. Authentication stays inside Chrome.
 
 ## Read workflows
 
+`PAYMENT_PAGE_URL` means the complete configured-group URL supplied by the user,
+including its trailing slash.
+
 ```sh
 holvi transactions list --json
 holvi transactions list --from 2026-07-01 --to 2026-07-31 --json
 holvi transactions list --missing-attachments --json
-holvi transactions get --debt 11111111-1111-4111-8111-111111111111
-holvi transactions comments list \
-  --debt 11111111-1111-4111-8111-111111111111
-holvi bookkeeping get --debt 11111111-1111-4111-8111-111111111111
+holvi transactions get --debt "$PAYMENT_PAGE_URL"
+holvi transactions comments list --debt "$PAYMENT_PAGE_URL"
+holvi bookkeeping get --debt "$PAYMENT_PAGE_URL"
 holvi bookkeeping categories
-holvi bookkeeping suggestions \
-  --debt 11111111-1111-4111-8111-111111111111
+holvi bookkeeping suggestions --debt "$PAYMENT_PAGE_URL"
 holvi audit list --limit 25
 ```
 
 - Prefer `transactions list --json` when matching records or passing identifiers
   to a later command. Without `--json`, `transactions list` uses a human-readable
   table.
+- `transactions get` returns separate `paymentUuid` and `debtUuid` values plus
+  bounded card, account, cardholder, exchange-rate, merchant-address,
+  merchant-category, payment-type, and attachment projections. Treat null fields
+  as unavailable instead of deriving them.
 - `--from` and `--to` are inclusive `YYYY-MM-DD` calendar dates. With no dates,
   `transactions list` returns all records available within bridge limits.
 - Bookkeeping detail keeps decimal values as strings and separates `unitPrice`
@@ -90,9 +103,16 @@ without acting on it.
 
 Creating a comment is a write. Always use this sequence:
 
-1. Confirm the exact debt UUID and exact comment content with the user.
-2. Run `holvi transactions comments create --debt UUID --content TEXT` without
-   `--yes` and inspect the authoritative transaction and proposed content.
+1. Confirm the exact payment-page URL or debt UUID and exact comment content with
+   the user.
+2. Run the dry run without `--yes` and inspect the authoritative transaction and
+   proposed content:
+
+   ```sh
+   holvi transactions comments create \
+     --debt "$PAYMENT_PAGE_URL" \
+     --content TEXT
+   ```
 3. Repeat the same command with `--yes` only with explicit authorization.
 4. Report the returned verified comment. Do not retry a failed or ambiguous
    write. Inspect the transaction comments before deciding what to do next.
@@ -110,7 +130,7 @@ A receipt upload is a write. Always use this sequence:
 
    ```sh
    holvi attachments upload \
-     --debt 11111111-1111-4111-8111-111111111111 \
+     --debt "$PAYMENT_PAGE_URL" \
      --file /absolute/path/to/receipt.pdf
    ```
 
@@ -120,7 +140,7 @@ A receipt upload is a write. Always use this sequence:
 
    ```sh
    holvi attachments upload \
-     --debt 11111111-1111-4111-8111-111111111111 \
+     --debt "$PAYMENT_PAGE_URL" \
      --file /absolute/path/to/receipt.pdf \
      --yes
    ```
@@ -141,14 +161,15 @@ A receipt upload is a write. Always use this sequence:
 
 Attachment deletion is irreversible. Always use this sequence:
 
-1. Run `holvi transactions get --debt UUID` and inspect the bounded `attachments` list.
+1. Run `holvi transactions get --debt "$PAYMENT_PAGE_URL"` and inspect the
+   bounded `attachments` list.
    Select the intended attachment by its exact `attachmentCode`, `title`, and
    `format`. Stop if identity is ambiguous.
 2. Run the deletion command without `--yes`:
 
    ```sh
    holvi attachments delete \
-     --debt 11111111-1111-4111-8111-111111111111 \
+     --debt "$PAYMENT_PAGE_URL" \
      --attachment ATTACHMENT-CODE
    ```
 
@@ -160,7 +181,7 @@ Attachment deletion is irreversible. Always use this sequence:
 
    ```sh
    holvi attachments delete \
-     --debt 11111111-1111-4111-8111-111111111111 \
+     --debt "$PAYMENT_PAGE_URL" \
      --attachment ATTACHMENT-CODE \
      --yes
    ```
@@ -178,12 +199,13 @@ Attachment deletion is irreversible. Always use this sequence:
 A description replacement changes the Holvi field labeled "Kuvaus". Always use
 this sequence:
 
-1. Identify the exact debt UUID, active line-item UUID, and replacement text.
+1. Identify the exact payment-page URL or debt UUID, active line-item UUID, and
+   replacement text.
 2. Run a dry run without `--yes`:
 
    ```sh
    holvi bookkeeping set-description \
-     --debt 11111111-1111-4111-8111-111111111111 \
+     --debt "$PAYMENT_PAGE_URL" \
      --item 22222222-2222-4222-8222-222222222222 \
      --description 'Replacement description'
    ```
@@ -195,7 +217,7 @@ this sequence:
 
    ```sh
    holvi bookkeeping set-description \
-     --debt 11111111-1111-4111-8111-111111111111 \
+     --debt "$PAYMENT_PAGE_URL" \
      --item 22222222-2222-4222-8222-222222222222 \
      --description 'Replacement description' \
      --yes

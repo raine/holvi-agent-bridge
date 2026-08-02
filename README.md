@@ -199,11 +199,13 @@ holvi transactions list --from 2026-07-01 --to 2026-07-31 \
 The JSON output reports Holvi's payment UUID and direct-match debt UUID as
 separate fields. Settled transactions normally have a debt UUID. Pending
 payments can have `null` until Holvi creates the debt record used for
-attachments.
+attachments. Holvi's `/group/{group}/payment/{uuid}/` page contains the debt
+UUID, despite the route name. Transaction-targeting commands accept either that
+debt UUID or the full payment-page URL for the configured group.
 
 ```sh
 holvi transactions get \
-  --debt '11111111-1111-4111-8111-111111111111'
+  --debt 'https://account.app.holvi.com/group/AbC123+example-company/payment/11111111-1111-4111-8111-111111111111/'
 ```
 
 List the internal comments associated with that transaction:
@@ -347,9 +349,9 @@ that the command does not use.
 | [`config path`](#holvi-config-path)                          | none                                                       | Print the private config path                      |
 | [`capabilities`](#holvi-capabilities)                       | none                                                       | Show enabled capabilities and operations          |
 | [`doctor`](#holvi-doctor)                                   | any configured capability                                  | Verify the Chrome connection and an API surface   |
-| [`transactions`](#holvi-transactions)                       | `transactions.read`, optionally `comments.write`            | List transactions or manage comments              |
+| [`transactions`](#holvi-transactions)                       | `transactions.read`, optionally `comments.write`            | List or inspect transactions and manage comments  |
 | [`transactions list`](#holvi-transactions-list)             | `transactions.read`                                        | List payment-account transactions                 |
-| [`transactions get`](#holvi-transactions-get)               | `transactions.read`                                        | Inspect one transaction's accounting record       |
+| [`transactions get`](#holvi-transactions-get)               | `transactions.read`                                        | Inspect one transaction's payment details         |
 | [`transactions comments`](#holvi-transactions-comments)     | `transactions.read`                                        | Read internal transaction comments                |
 | `transactions comments create`                              | `transactions.read`, `comments.write`                      | Dry-run or create one internal comment            |
 | [`attachments`](#holvi-attachments)                         | `transactions.read`, plus a write or delete capability     | Upload or delete debt attachments                 |
@@ -488,7 +490,7 @@ metadata.
 
 ### `holvi transactions`
 
-Groups transaction listing and comment commands.
+Groups transaction listing, detail, and comment commands.
 
 ```sh
 holvi transactions <COMMAND>
@@ -523,8 +525,10 @@ transaction available within the configured page and result limits. JSON keeps
 Reads or creates internal comments for a transaction debt.
 
 ```sh
-holvi transactions comments list --debt UUID
-holvi transactions comments create --debt UUID --content TEXT [--yes]
+holvi transactions comments list --debt DEBT_UUID_OR_PAYMENT_PAGE_URL
+holvi transactions comments create \
+  --debt DEBT_UUID_OR_PAYMENT_PAGE_URL \
+  --content TEXT [--yes]
 ```
 
 Listing requires `transactions.read`. It reads the authoritative debt, verifies
@@ -547,17 +551,29 @@ Listings use Holvi's 25-record page size and stop at 40 pages, 1,000 results, a
 
 ### `holvi transactions get`
 
-Reads the accounting record linked to one transaction and prints the compact view
-used by attachment commands.
+Reads the fixed account-scoped responses used by Holvi's transaction UI and
+prints a compact payment detail projection.
 
 ```sh
-holvi transactions get --debt UUID
+holvi transactions get --debt DEBT_UUID_OR_PAYMENT_PAGE_URL
 ```
 
-The result includes the debt UUID, object code, counterparty, amount, currency,
-attachment count, bounded attachment metadata, and bookkeeping status. Each
-attachment includes only `attachmentCode`, `title`, and `format`. `--debt` must
-be a UUID.
+The result keeps `paymentUuid` and `debtUuid` separate. It includes the card's
+last four digits, configured payment account with a shortened IBAN, cardholder,
+exchange rate, merchant address, merchant category, and payment type when Holvi
+supplies those fields. The result also includes compact debt preview fields and
+bounded attachment metadata for receipt workflows. The bridge validates the debt
+and card profile against the configured payment account, selects exactly one
+matching account from the bounded pool response, and searches the bounded payment
+feed for the related payment UUID.
+
+Holvi's `/group/{group}/payment/{uuid}/` route contains `debtUuid`, not
+`paymentUuid`. `--debt` accepts either a debt UUID or the full
+`https://account.app.holvi.com/group/{configured-group}/payment/{debtUuid}/` URL.
+A URL must have the exact origin, configured group, path shape, and trailing
+slash, without user information, a query, or a fragment. The same target parser
+applies to transaction comments, attachment commands, and debt-scoped
+bookkeeping commands.
 
 ### `holvi attachments`
 
@@ -572,14 +588,16 @@ holvi attachments <COMMAND>
 Validates a receipt path and either prints a dry run or uploads the file.
 
 ```sh
-holvi attachments upload --debt UUID --file /absolute/path/to/receipt.pdf [--yes]
+holvi attachments upload \
+  --debt DEBT_UUID_OR_PAYMENT_PAGE_URL \
+  --file /absolute/path/to/receipt.pdf [--yes]
 ```
 
-| Option        | Required | Description                                   |
-| ------------- | -------- | --------------------------------------------- |
-| `--debt UUID` | yes      | Debt that receives the attachment             |
-| `--file PATH` | yes      | Absolute path under an approved receipt root  |
-| `--yes`       | no       | Perform the upload after all preflight checks |
+| Option          | Required | Description                                      |
+| --------------- | -------- | ------------------------------------------------ |
+| `--debt TARGET` | yes      | Debt UUID or configured-group payment-page URL   |
+| `--file PATH`   | yes      | Absolute path under an approved receipt root     |
+| `--yes`         | no       | Perform the upload after all preflight checks    |
 
 Without `--yes`, the command reads the debt and prints `dryRun`, `transaction`,
 `receipt`, and `next` fields without modifying Holvi. With `--yes`, the
@@ -597,12 +615,14 @@ Validates one debt and one attachment code, then prints a dry run or performs th
 irreversible deletion.
 
 ```sh
-holvi attachments delete --debt UUID --attachment CODE [--yes]
+holvi attachments delete \
+  --debt DEBT_UUID_OR_PAYMENT_PAGE_URL \
+  --attachment CODE [--yes]
 ```
 
 | Option              | Required | Description                                      |
 | ------------------- | -------- | ------------------------------------------------ |
-| `--debt UUID`       | yes      | Debt that owns the selected attachment           |
+| `--debt TARGET`     | yes      | Debt UUID or configured-group payment-page URL   |
 | `--attachment CODE` | yes      | Exact code from the debt's projected attachments |
 | `--yes`             | no       | Perform the deletion after all preflight checks  |
 
@@ -629,7 +649,7 @@ Reads the accounting document for a debt directly from Holvi and returns a fixed
 set of JSON fields.
 
 ```sh
-holvi bookkeeping get --debt UUID
+holvi bookkeeping get --debt DEBT_UUID_OR_PAYMENT_PAGE_URL
 ```
 
 The result includes debt identity, booking and workflow metadata, attachment
@@ -653,7 +673,7 @@ Unprojected category fields do not cross the extension boundary.
 Lists Holvi's ordered category suggestions for one debt.
 
 ```sh
-holvi bookkeeping suggestions --debt UUID
+holvi bookkeeping suggestions --debt DEBT_UUID_OR_PAYMENT_PAGE_URL
 ```
 
 The JSON result contains `debtUuid` and `categoryCodes`. The command converts
@@ -668,7 +688,7 @@ UTF-8 bytes.
 
 ```sh
 holvi bookkeeping set-description \
-  --debt UUID \
+  --debt DEBT_UUID_OR_PAYMENT_PAGE_URL \
   --item UUID \
   --description TEXT \
   [--yes]
@@ -815,7 +835,9 @@ The capabilities use these Holvi application endpoints:
 
 ```text
 GET    /api/pool/{poolHandle}/ux/payments-feed/
+GET    /api/pool/{poolHandle}/
 GET    /api/pool/{poolHandle}/debt/{debtUuid}/
+GET    /api/pool/{poolHandle}/cardprofile/{cardProfileUuid}/
 PATCH  /api/pool/{poolHandle}/debt/{debtUuid}/
 GET    /api/pool/{poolHandle}/debt/{debtUuid}/comment/
 POST   /api/pool/{poolHandle}/debt/{debtUuid}/comment/

@@ -17,6 +17,7 @@
   "actions": {
     "doctor": [],
     "transactions.list": ["transactions.read"],
+    "transactions.get": ["transactions.read"],
     "debts.get": ["transactions.read"],
     "comments.list": ["transactions.read"],
     "comments.create": ["transactions.read", "comments.write"],

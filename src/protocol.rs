@@ -158,6 +158,7 @@ pub enum Action {
     HostRestart(EmptyParams),
     Doctor(EmptyParams),
     TransactionsList(TransactionParams),
+    TransactionsGet(DebtParams),
     DebtGet(DebtParams),
     CommentsList(DebtParams),
     CommentsCreate(CommentCreateParams),
@@ -176,6 +177,7 @@ impl Action {
             Self::HostRestart(_) => "host.restart",
             Self::Doctor(_) => "doctor",
             Self::TransactionsList(_) => "transactions.list",
+            Self::TransactionsGet(_) => "transactions.get",
             Self::DebtGet(_) => "debts.get",
             Self::CommentsList(_) => "comments.list",
             Self::CommentsCreate(_) => "comments.create",
@@ -195,7 +197,8 @@ impl Action {
             | Self::Doctor(params)
             | Self::BookkeepingCategories(params) => serde_json::to_value(params),
             Self::TransactionsList(params) => serde_json::to_value(params),
-            Self::DebtGet(params)
+            Self::TransactionsGet(params)
+            | Self::DebtGet(params)
             | Self::CommentsList(params)
             | Self::BookkeepingGet(params)
             | Self::BookkeepingSuggestions(params) => serde_json::to_value(params),
@@ -227,6 +230,7 @@ impl Action {
                 );
                 Self::TransactionsList(params)
             }
+            "transactions.get" => Self::TransactionsGet(validated_debt_params(decode(params)?)?),
             "debts.get" => Self::DebtGet(validated_debt_params(decode(params)?)?),
             "comments.list" => Self::CommentsList(validated_debt_params(decode(params)?)?),
             "comments.create" => {
@@ -610,6 +614,7 @@ mod tests {
                 "transactions.list",
                 json!({"from": "", "to": "", "missingAttachments": "false"}),
             ),
+            ("transactions.get", json!({"debtUuid": "not-a-uuid"})),
             ("debts.get", json!({"debtUuid": "not-a-uuid"})),
             ("comments.list", json!({"debtUuid": "not-a-uuid"})),
             (

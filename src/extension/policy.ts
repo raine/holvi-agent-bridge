@@ -3,6 +3,7 @@ export const minimumFileBytes = 1;
 export const actionCapabilities = {
   doctor: [],
   "transactions.list": ["transactions.read"],
+  "transactions.get": ["transactions.read"],
   "debts.get": ["transactions.read"],
   "comments.list": ["transactions.read"],
   "comments.create": ["transactions.read", "comments.write"],
@@ -21,6 +22,7 @@ export type CommandAction = Exclude<BridgeAction, "attachments.upload">;
 export const commandActions = {
   doctor: true,
   "transactions.list": true,
+  "transactions.get": true,
   "debts.get": true,
   "comments.list": true,
   "comments.create": true,

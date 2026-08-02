@@ -54,6 +54,8 @@ export class CommandService {
       doctor: (auth) => this.doctor(auth),
       "transactions.list": (auth, params) =>
         this.api.listTransactions(auth, params),
+      "transactions.get": (auth, params) =>
+        this.api.transactionDetails(auth, asString(params.debtUuid)),
       "debts.get": (auth, params) =>
         this.api.previewDebt(auth, asString(params.debtUuid)),
       "comments.list": (auth, params) =>

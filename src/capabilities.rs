@@ -2,9 +2,10 @@ use serde::ser::{Serialize, SerializeMap, Serializer};
 
 use crate::protocol::Action;
 
-pub const ACTION_CAPABILITIES: [(&str, &[&str]); 12] = [
+pub const ACTION_CAPABILITIES: [(&str, &[&str]); 13] = [
     ("doctor", &[]),
     ("transactions.list", &["transactions.read"]),
+    ("transactions.get", &["transactions.read"]),
     ("debts.get", &["transactions.read"]),
     ("comments.list", &["transactions.read"]),
     ("comments.create", &["transactions.read", "comments.write"]),
@@ -26,9 +27,10 @@ pub const ACTION_CAPABILITIES: [(&str, &[&str]); 12] = [
 pub fn required_capabilities(action: &Action) -> &'static [&'static str] {
     match action {
         Action::HostRestart(_) | Action::Doctor(_) => &[],
-        Action::TransactionsList(_) | Action::DebtGet(_) | Action::CommentsList(_) => {
-            &["transactions.read"]
-        }
+        Action::TransactionsList(_)
+        | Action::TransactionsGet(_)
+        | Action::DebtGet(_)
+        | Action::CommentsList(_) => &["transactions.read"],
         Action::CommentsCreate(_) => &["transactions.read", "comments.write"],
         Action::AttachmentUpload(_) => &["transactions.read", "attachments.write"],
         Action::AttachmentDelete(_) => &["transactions.read", "attachments.delete"],
@@ -131,6 +133,9 @@ mod tests {
                 to: String::new(),
                 missing_attachments: false,
             }),
+            Action::TransactionsGet(DebtParams {
+                debt_uuid: String::new(),
+            }),
             Action::DebtGet(DebtParams {
                 debt_uuid: String::new(),
             }),
@@ -229,7 +234,7 @@ mod tests {
     fn serialization_preserves_existing_operation_order() {
         let value = serde_json::to_string(&enabled_actions(&[])).unwrap();
         assert!(value.starts_with(
-            r#"{"doctor":true,"transactions.list":false,"debts.get":false,"comments.list":false,"#
+            r#"{"doctor":true,"transactions.list":false,"transactions.get":false,"debts.get":false,"comments.list":false,"#
         ));
     }
 }

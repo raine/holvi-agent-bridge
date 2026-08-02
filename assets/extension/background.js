@@ -12,6 +12,7 @@
   var maxAuditEnvelopeResults = 200;
   var maxFeedPageResults = 1e4;
   var maxPaymentMatches = 1000;
+  var maxPaymentAccounts = 100;
   var maxDebtAttachments = 1000;
   var maxCommentPageResults = 25;
   var maxCommentResults = 1000;
@@ -59,6 +60,13 @@
       return value;
     }
     throw new Error(`${label} has an invalid decimal value.`);
+  }
+  function requiredDecimal(value, label) {
+    const result = decimal(value, label);
+    if (result === null) {
+      throw new Error(`${label} is required.`);
+    }
+    return result;
   }
   function price(value, label, includeVatRate) {
     if (value === null || value === undefined) {
@@ -119,7 +127,10 @@
     for (const entry of matches) {
       const match = record(entry, "Payment match");
       const matchType = optionalString(match.match_type, "Payment match type");
-      if (matchType === "direct" && direct === null) {
+      if (matchType === "direct") {
+        if (direct !== null) {
+          throw new Error("Payment has ambiguous direct debt matches.");
+        }
         direct = match;
       }
     }
@@ -166,6 +177,96 @@
   }
   function projectTransactionListing(value) {
     return projection(value);
+  }
+  function projectTransactionDetailDebt(value, debtUuid, paymentAccountUuid) {
+    const debt = record(value, "Transaction detail debt");
+    const requestedUuid = uuid(debtUuid, "Debt UUID");
+    const responseUuid = uuid(debt.uuid, "Transaction detail debt UUID");
+    if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
+      throw new Error("Holvi transaction detail debt UUID does not match the request.");
+    }
+    const configuredAccount = uuid(paymentAccountUuid, "Configured payment account UUID");
+    const responseAccount = uuid(debt.payment_account_uuid, "Transaction detail payment account UUID");
+    if (responseAccount.toLowerCase() !== configuredAccount.toLowerCase()) {
+      throw new Error("Holvi transaction detail debt is outside the configured payment account.");
+    }
+    const links = optionalRecord(debt.links, "Transaction detail links");
+    const receiver = optionalRecord(debt.receiver, "Transaction detail receiver");
+    const merchant = optionalRecord(receiver.merchant_info, "Transaction detail merchant");
+    const address = optionalRecord(merchant.address, "Transaction detail merchant address");
+    const merchantAddress = {
+      street: optionalString(address.street, "Merchant address street"),
+      postcode: optionalString(address.postcode, "Merchant address postcode"),
+      city: optionalString(address.city, "Merchant address city"),
+      country: optionalString(address.country, "Merchant address country")
+    };
+    const conversion = optionalRecord(debt.currency_conversion, "Transaction detail currency conversion");
+    const exchangeRate = Object.keys(conversion).length ? {
+      baseCurrency: boundedString(debt.currency, "Payment currency"),
+      counterpartyCurrency: boundedString(conversion.counterparty_currency, "Exchange counterparty currency"),
+      counterpartyAmount: requiredDecimal(conversion.counterparty_amount, "Exchange counterparty amount"),
+      rate: requiredDecimal(conversion.rate, "Exchange rate")
+    } : null;
+    const creator = optionalRecord(debt.creator, "Transaction detail creator");
+    const cardProfileUuid = optionalUuid(links.card_profile, "Transaction detail card profile UUID");
+    return projection({
+      debtUuid: requestedUuid,
+      paymentAccountUuid: responseAccount,
+      cardProfileUuid,
+      cardholder: cardProfileUuid ? optionalString(creator.displayname, "Transaction detail cardholder") : null,
+      exchangeRate,
+      merchantAddress: Object.values(merchantAddress).some(Boolean) ? merchantAddress : null,
+      merchantCategory: optionalString(merchant.category, "Transaction detail merchant category"),
+      paymentType: optionalString(merchant.payment_type, "Transaction detail payment type")
+    });
+  }
+  function projectTransactionAccount(value, paymentAccountUuid) {
+    const pool = record(value, "Pool account response");
+    const requestedUuid = uuid(paymentAccountUuid, "Configured payment account UUID");
+    const accounts = boundedArray(pool.paymentaccounts, "Pool payment accounts", maxPaymentAccounts);
+    const matches = accounts.filter((entry) => {
+      const account2 = record(entry, "Pool payment account");
+      return uuid(account2.uuid, "Pool payment account UUID").toLowerCase() === requestedUuid.toLowerCase();
+    });
+    if (matches.length !== 1) {
+      throw new Error("Holvi pool response did not contain one configured payment account.");
+    }
+    const account = record(matches[0], "Configured payment account");
+    const iban = boundedString(account.iban, "Payment account IBAN");
+    if (iban.length < 8 || iban.length > 64 || !/^[a-z0-9]+$/i.test(iban)) {
+      throw new Error("Payment account IBAN has an unexpected shape.");
+    }
+    return projection({
+      paymentAccountUuid: requestedUuid,
+      name: boundedString(account.name, "Payment account name"),
+      iban: `${iban.slice(0, 4)} •••• ${iban.slice(-4)}`,
+      currency: boundedString(account.currency, "Payment account currency")
+    });
+  }
+  function projectTransactionCard(value, cardProfileUuid, paymentAccountUuid) {
+    const card = record(value, "Transaction card profile");
+    const requestedCard = uuid(cardProfileUuid, "Card profile UUID");
+    const responseCard = uuid(card.uuid, "Transaction card profile UUID");
+    if (responseCard.toLowerCase() !== requestedCard.toLowerCase()) {
+      throw new Error("Holvi card profile UUID does not match the debt link.");
+    }
+    const requestedAccount = uuid(paymentAccountUuid, "Configured payment account UUID");
+    const responseAccount = uuid(card.payment_account_uuid, "Card payment account UUID");
+    if (responseAccount.toLowerCase() !== requestedAccount.toLowerCase()) {
+      throw new Error("Holvi card profile is outside the configured payment account.");
+    }
+    const maskedPan = boundedString(card.masked_pan, "Card masked PAN");
+    const lastFour = maskedPan.length <= 64 ? maskedPan.match(/(\d{4})$/)?.[1] : undefined;
+    if (!lastFour) {
+      throw new Error("Holvi card profile has an invalid masked PAN.");
+    }
+    return projection({
+      cardProfileUuid: requestedCard,
+      lastFour
+    });
+  }
+  function projectTransactionDetails(value) {
+    return projection(record(value, "Transaction details"));
   }
   function attachmentCode(value) {
     const code = boundedString(value, "Attachment code");
@@ -437,6 +538,7 @@
   var actionCapabilities = {
     doctor: [],
     "transactions.list": ["transactions.read"],
+    "transactions.get": ["transactions.read"],
     "debts.get": ["transactions.read"],
     "comments.list": ["transactions.read"],
     "comments.create": ["transactions.read", "comments.write"],
@@ -971,6 +1073,9 @@
     debtPath(debtUuid) {
       return `${this.session.apiRoot()}debt/${encodeURIComponent(validateUuid(debtUuid, "debt"))}/`;
     }
+    cardPath(cardProfileUuid) {
+      return `${this.session.apiRoot()}cardprofile/${encodeURIComponent(validateUuid(cardProfileUuid, "card profile"))}/`;
+    }
     commentPath(debtUuid) {
       return `${this.debtPath(debtUuid)}comment/`;
     }
@@ -1024,6 +1129,60 @@
         count: results.length,
         missingAttachments,
         results
+      });
+    }
+    async paymentUuidForDebt(auth, debtUuid) {
+      const seenCursors = new Set;
+      let cursor = "";
+      let pages = 0;
+      let results = 0;
+      do {
+        const page = await this.transactionFeedPage(auth, cursor);
+        pages += 1;
+        results += page.results.length;
+        if (results > this.staticConfig.maxTransactionResults) {
+          throw new Error("The transaction lookup exceeded its result limit.");
+        }
+        const matches = page.results.filter((item) => typeof item.debtUuid === "string" && item.debtUuid.toLowerCase() === debtUuid.toLowerCase());
+        if (matches.length > 1) {
+          throw new Error("Holvi returned an ambiguous payment match.");
+        }
+        if (matches.length === 1) {
+          return asString(matches[0]?.paymentUuid) || null;
+        }
+        if (pages >= this.staticConfig.maxTransactionPages && page.hasMore) {
+          throw new Error("The transaction lookup exceeded its page limit.");
+        }
+        cursor = page.nextCursor;
+        if (cursor && seenCursors.has(cursor)) {
+          throw new Error("Holvi repeated a pagination cursor.");
+        }
+        seenCursors.add(cursor);
+      } while (cursor);
+      return null;
+    }
+    async transactionDetails(auth, debtUuid) {
+      const validUuid = validateUuid(debtUuid, "debt");
+      const paymentAccountUuid = this.session.config.paymentAccountUuid;
+      const debtValue = await this.request(auth, this.debtPath(validUuid));
+      const debt = projectTransactionDetailDebt(debtValue, validUuid, paymentAccountUuid);
+      const preview = projectDebtPreview(debtValue, validUuid, paymentAccountUuid);
+      const [paymentUuid, account, card] = await Promise.all([
+        this.paymentUuidForDebt(auth, validUuid),
+        this.request(auth, this.session.apiRoot()).then((value) => projectTransactionAccount(value, paymentAccountUuid)),
+        debt.cardProfileUuid ? this.request(auth, this.cardPath(debt.cardProfileUuid)).then((value) => projectTransactionCard(value, debt.cardProfileUuid, paymentAccountUuid)) : Promise.resolve(null)
+      ]);
+      return projectTransactionDetails({
+        ...preview,
+        paymentUuid,
+        debtUuid: debt.debtUuid,
+        card,
+        account,
+        cardholder: debt.cardholder,
+        exchangeRate: debt.exchangeRate,
+        merchantAddress: debt.merchantAddress,
+        merchantCategory: debt.merchantCategory,
+        paymentType: debt.paymentType
       });
     }
     async previewDebt(auth, debtUuid) {
@@ -1174,6 +1333,7 @@
       this.handlers = {
         doctor: (auth) => this.doctor(auth),
         "transactions.list": (auth, params) => this.api.listTransactions(auth, params),
+        "transactions.get": (auth, params) => this.api.transactionDetails(auth, asString2(params.debtUuid)),
         "debts.get": (auth, params) => this.api.previewDebt(auth, asString2(params.debtUuid)),
         "comments.list": (auth, params) => this.api.listComments(auth, asString2(params.debtUuid)),
         "comments.create": (auth, params) => this.comments.createComment(auth, params),
