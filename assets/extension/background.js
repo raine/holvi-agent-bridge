@@ -1,6 +1,105 @@
 "use strict";
 (() => {
 
+  // src/extension/policy.ts
+  var actionCapabilities = {
+    doctor: [],
+    transactions: ["transactions.read"],
+    preview: ["transactions.read"],
+    upload: ["transactions.read", "attachments.write"],
+    "bookkeeping.get": ["bookkeeping.read"],
+    "bookkeeping.categories": ["bookkeeping.read"],
+    "bookkeeping.suggestions": ["bookkeeping.read"],
+    "audit.list": ["audit.read"]
+  };
+  var supportedCapabilities = new Set(Object.values(actionCapabilities).flat());
+  function isBridgeAction(action) {
+    return Object.hasOwn(actionCapabilities, action);
+  }
+  function requiredCapabilities(action) {
+    return isBridgeAction(action) ? actionCapabilities[action] : null;
+  }
+
+  // src/extension/commands.ts
+  function asString(value) {
+    return typeof value === "string" ? value : "";
+  }
+
+  class CommandService {
+    session;
+    api;
+    requestAuth;
+    handlers;
+    constructor(session, api, requestAuth) {
+      this.session = session;
+      this.api = api;
+      this.requestAuth = requestAuth;
+      this.handlers = {
+        doctor: (auth) => this.doctor(auth),
+        transactions: (auth, params) => this.api.listTransactions(auth, params),
+        preview: (auth, params) => this.api.previewDebt(auth, asString(params.debtUuid)),
+        "bookkeeping.get": (auth, params) => this.api.bookkeepingDebt(auth, asString(params.debtUuid)),
+        "bookkeeping.categories": (auth) => this.api.bookkeepingCategories(auth),
+        "bookkeeping.suggestions": (auth, params) => this.api.bookkeepingSuggestions(auth, asString(params.debtUuid)),
+        "audit.list": (auth, params) => this.api.recentAudit(auth, params.limit)
+      };
+    }
+    async handle(message) {
+      const action = message.action || "";
+      if (!isBridgeAction(action)) {
+        throw new Error("The local helper requested an unsupported action.");
+      }
+      const requirements = requiredCapabilities(action);
+      if (!requirements) {
+        throw new Error("The local helper requested an unsupported action.");
+      }
+      this.session.requireCapabilities(...requirements);
+      if (action === "upload") {
+        throw new Error("Receipt uploads require transfer messages.");
+      }
+      const auth = await this.requestAuth();
+      return this.handlers[action](auth, message.params || {});
+    }
+    async doctor(auth) {
+      const config = this.session.optionalConfig;
+      const base = {
+        connected: true,
+        groupPathSegment: config?.groupPathSegment,
+        poolHandle: config?.poolHandle,
+        paymentAccountUuid: config?.paymentAccountUuid,
+        capabilities: config?.capabilities
+      };
+      if (config?.capabilities.includes("transactions.read")) {
+        this.session.requireCapabilities("transactions.read");
+        const page = await this.api.transactionFeedPage(auth);
+        return {
+          ...base,
+          probeAction: "transactions",
+          firstPageResults: page.results.length
+        };
+      }
+      if (config?.capabilities.includes("bookkeeping.read")) {
+        this.session.requireCapabilities("bookkeeping.read");
+        const categories = await this.api.bookkeepingCategories(auth);
+        return {
+          ...base,
+          probeAction: "bookkeeping.categories",
+          categoryCount: categories.length
+        };
+      }
+      if (config?.capabilities.includes("audit.read")) {
+        this.session.requireCapabilities("audit.read");
+        const audit = await this.api.recentAudit(auth, 1);
+        return {
+          ...base,
+          probeAction: "audit.list",
+          recentActivityCount: audit.returnedCount
+        };
+      }
+      return { ...base, probeAction: null };
+    }
+  }
+
   // src/extension/projections.ts
   var uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   var decimalPattern = /^-?\d+(?:\.\d+)?$/;
@@ -337,23 +436,185 @@
     });
   }
 
-  // src/extension/policy.ts
-  var actionCapabilities = {
-    doctor: [],
-    transactions: ["transactions.read"],
-    preview: ["transactions.read"],
-    upload: ["transactions.read", "attachments.write"],
-    "bookkeeping.get": ["bookkeeping.read"],
-    "bookkeeping.categories": ["bookkeeping.read"],
-    "bookkeeping.suggestions": ["bookkeeping.read"],
-    "audit.list": ["audit.read"]
-  };
-  var supportedCapabilities = new Set(Object.values(actionCapabilities).flat());
-  function isBridgeAction(action) {
-    return Object.hasOwn(actionCapabilities, action);
+  // src/extension/session.ts
+  var uuidPattern2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  function groupPathSegmentFromUrl(value, accountOrigin) {
+    try {
+      const url = new URL(value);
+      if (url.origin !== accountOrigin) {
+        return "";
+      }
+      const match = url.pathname.match(/^\/group\/([^/]+)(?:\/|$)/);
+      return match?.[1] ? decodeURIComponent(match[1]) : "";
+    } catch {
+      return "";
+    }
   }
-  function requiredCapabilities(action) {
-    return isBridgeAction(action) ? actionCapabilities[action] : null;
+  function validateRuntimeConfig(value, staticConfig) {
+    const config = value;
+    const groupParts = (config.groupPathSegment || "").match(/^([^/+]+)\+([^/]+)$/);
+    const groupPoolHandle = groupParts?.[1] || "";
+    if (!groupParts || groupPoolHandle !== config.poolHandle || !uuidPattern2.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < 1 || (config.maxFileBytes || 0) > staticConfig.maxFileBytes) {
+      throw new Error("The native host supplied an invalid Holvi account boundary.");
+    }
+    return config;
+  }
+  function validateUuid(value, resource) {
+    if (!uuidPattern2.test(value || "")) {
+      throw new Error(`A valid Holvi ${resource} UUID is required.`);
+    }
+    return value;
+  }
+
+  class BridgeSession {
+    staticConfig;
+    runtimeConfig = null;
+    constructor(staticConfig) {
+      this.staticConfig = staticConfig;
+    }
+    configure(value) {
+      const config = validateRuntimeConfig(value, this.staticConfig);
+      this.runtimeConfig = config;
+      return config;
+    }
+    clear() {
+      this.runtimeConfig = null;
+    }
+    get optionalConfig() {
+      return this.runtimeConfig;
+    }
+    get config() {
+      if (!this.runtimeConfig) {
+        throw new Error("The local bridge has no configured Holvi account.");
+      }
+      return this.runtimeConfig;
+    }
+    requireCapabilities(...capabilities) {
+      if (!this.runtimeConfig || capabilities.some((capability) => !this.runtimeConfig?.capabilities.includes(capability))) {
+        throw new Error(`Action requires capabilities: ${capabilities.join(", ")}.`);
+      }
+    }
+    apiRoot() {
+      return `/api/pool/${encodeURIComponent(this.config.poolHandle)}/`;
+    }
+  }
+
+  // src/extension/holvi-api.ts
+  function asString2(value) {
+    return typeof value === "string" ? value : "";
+  }
+  function withinDateRange(payment2, from, to) {
+    const date = asString2(payment2.date);
+    return Boolean(date) && (!from || date >= from) && (!to || date <= to);
+  }
+
+  class HolviApi {
+    staticConfig;
+    session;
+    fetchRequest;
+    constructor(staticConfig, session, fetchRequest = fetch) {
+      this.staticConfig = staticConfig;
+      this.session = session;
+      this.fetchRequest = fetchRequest;
+    }
+    async request(auth, apiPath, options = {}) {
+      if (!apiPath.startsWith(this.session.apiRoot())) {
+        throw new Error("Refused an API path outside the configured Holvi account.");
+      }
+      const headers = new Headers(options.headers || {});
+      headers.set("Accept", "application/json");
+      headers.set("Authorization", `Bearer ${auth.token}`);
+      if (auth.csrfToken) {
+        headers.set("X-CSRFToken", auth.csrfToken);
+      }
+      const response = await this.fetchRequest(`${this.staticConfig.apiOrigin}${apiPath}`, {
+        ...options,
+        headers,
+        credentials: "include",
+        cache: "no-store",
+        redirect: "error"
+      });
+      const contentType = response.headers.get("content-type") || "";
+      const body = contentType.includes("application/json") ? await response.json() : await response.text();
+      if (!response.ok) {
+        const detail = typeof body === "string" ? body.slice(0, 300) : JSON.stringify(body).slice(0, 300);
+        throw new Error(`Holvi API returned ${response.status}: ${detail}`);
+      }
+      return body;
+    }
+    feedPath(cursor = "", missingAttachments = false) {
+      const query = new URLSearchParams({
+        timeline: "past",
+        payment_account: this.session.config.paymentAccountUuid
+      });
+      if (missingAttachments) {
+        query.set("missing_attachments", "true");
+      }
+      if (cursor) {
+        query.set("cursor", cursor);
+      }
+      return `${this.session.apiRoot()}ux/payments-feed/?${query}`;
+    }
+    debtPath(debtUuid) {
+      return `${this.session.apiRoot()}debt/${encodeURIComponent(validateUuid(debtUuid, "debt"))}/`;
+    }
+    async transactionFeedPage(auth, cursor = "", missingAttachments = false) {
+      return projectTransactionFeedPage(await this.request(auth, this.feedPath(cursor, missingAttachments)));
+    }
+    async listTransactions(auth, params) {
+      const results = [];
+      const seenCursors = new Set;
+      const missingAttachments = params.missingAttachments === true;
+      let cursor = "";
+      let pages = 0;
+      do {
+        const page = await this.transactionFeedPage(auth, cursor, missingAttachments);
+        for (const item of page.results) {
+          if (withinDateRange(item, asString2(params.from), asString2(params.to))) {
+            results.push(item);
+          }
+        }
+        pages += 1;
+        if (results.length > this.staticConfig.maxTransactionResults) {
+          throw new Error("The transaction listing exceeded its result limit.");
+        }
+        if (pages >= this.staticConfig.maxTransactionPages && page.hasMore) {
+          throw new Error("The transaction listing exceeded its page limit.");
+        }
+        cursor = page.nextCursor;
+        if (cursor && seenCursors.has(cursor)) {
+          throw new Error("Holvi repeated a pagination cursor.");
+        }
+        seenCursors.add(cursor);
+      } while (cursor);
+      return projectTransactionListing({
+        pages,
+        count: results.length,
+        missingAttachments,
+        results
+      });
+    }
+    async previewDebt(auth, debtUuid) {
+      const validUuid = validateUuid(debtUuid, "debt");
+      return projectDebtPreview(await this.request(auth, this.debtPath(validUuid)), validUuid);
+    }
+    async bookkeepingDebt(auth, debtUuid) {
+      const validUuid = validateUuid(debtUuid, "debt");
+      return projectBookkeepingDebt(await this.request(auth, this.debtPath(validUuid)), validUuid);
+    }
+    async bookkeepingCategories(auth) {
+      return projectCategories(await this.request(auth, `${this.session.apiRoot()}category/`));
+    }
+    async bookkeepingSuggestions(auth, debtUuid) {
+      const validUuid = validateUuid(debtUuid, "debt");
+      return projectSuggestions(await this.request(auth, `${this.debtPath(validUuid)}haip/bookkeeping-suggestions/`), validUuid);
+    }
+    async recentAudit(auth, limit) {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 25) {
+        throw new Error("Activity limit must be between 1 and 25.");
+      }
+      return projectAuditPage(await this.request(auth, `${this.session.apiRoot()}log-feed/?o=-timestamp&page_size=25`), limit);
+    }
   }
 
   // src/extension/upload-transfer.ts
@@ -363,7 +624,7 @@
     "image/jpeg",
     "image/gif"
   ]);
-  var uuidPattern2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  var uuidPattern3 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   var sha256Pattern = /^[a-f0-9]{64}$/;
   var base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
   var fileChunkBytes = 480 * 1024;
@@ -408,7 +669,7 @@
       if (this.active) {
         throw new UploadTransferError("Another receipt upload is active.", message.id);
       }
-      if (typeof message.debtUuid !== "string" || !uuidPattern2.test(message.debtUuid)) {
+      if (typeof message.debtUuid !== "string" || !uuidPattern3.test(message.debtUuid)) {
         throw new UploadTransferError("A valid Holvi debt UUID is required.", message.id);
       }
       if (!Number.isSafeInteger(message.size) || message.size < 1 || message.size > maxFileBytes) {
@@ -489,485 +750,337 @@
     }
   }
 
+  // src/extension/native-bridge.ts
+  var requestIdPattern = /^[0-9a-f-]{16,64}$/i;
+
+  class NativeBridge {
+    staticConfig;
+    session;
+    tabs;
+    commands;
+    uploads;
+    nativePort = null;
+    reconnectTimer = null;
+    uploadExpiryTimer = null;
+    uploadTransfers = new UploadTransferLifecycle;
+    constructor(staticConfig, session, tabs, commands, uploads) {
+      this.staticConfig = staticConfig;
+      this.session = session;
+      this.tabs = tabs;
+      this.commands = commands;
+      this.uploads = uploads;
+    }
+    connect() {
+      if (this.nativePort || this.tabs.size === 0) {
+        return;
+      }
+      this.nativePort = chrome.runtime.connectNative(this.staticConfig.nativeHostName);
+      this.nativePort.onMessage.addListener((message) => this.handleMessage(message));
+      this.nativePort.onDisconnect.addListener(() => {
+        this.nativePort = null;
+        this.session.clear();
+        this.uploadTransfers.cancel();
+        this.clearUploadExpiry();
+        if (this.tabs.size > 0 && this.reconnectTimer === null) {
+          this.reconnectTimer = self.setTimeout(() => {
+            this.reconnectTimer = null;
+            this.connect();
+          }, 1000);
+        }
+      });
+    }
+    reportTabState() {
+      if (!this.nativePort || !this.session.optionalConfig) {
+        return;
+      }
+      const tab = this.tabs.configuredTab();
+      this.nativePort.postMessage(tab ? { type: "tab_ready", tabId: tab[0] } : { type: "tab_unavailable" });
+    }
+    postNative(message) {
+      if (!this.nativePort) {
+        throw new Error("The local Holvi helper is disconnected.");
+      }
+      this.nativePort.postMessage(message);
+    }
+    postResult(id, ok, value) {
+      try {
+        this.postNative(ok ? { type: "result", id, ok, data: value } : {
+          type: "result",
+          id,
+          ok,
+          error: value instanceof Error ? value.message : String(value)
+        });
+      } catch {}
+    }
+    clearUploadExpiry() {
+      if (this.uploadExpiryTimer !== null) {
+        clearTimeout(this.uploadExpiryTimer);
+        this.uploadExpiryTimer = null;
+      }
+    }
+    scheduleUploadExpiry() {
+      this.clearUploadExpiry();
+      this.uploadExpiryTimer = self.setTimeout(() => {
+        this.uploadExpiryTimer = null;
+        const expiredId = this.uploadTransfers.expire(Date.now());
+        if (expiredId) {
+          this.postResult(expiredId, false, new Error("Receipt transfer expired."));
+        }
+      }, uploadTransferExpiryMs);
+    }
+    finishUpload(upload) {
+      return this.tabs.requestAuth().then((auth) => this.uploads.uploadReceipt(auth, upload));
+    }
+    handleMessage(value) {
+      const message = value;
+      if (!message || typeof message !== "object") {
+        return;
+      }
+      if (message.type === "host_ready") {
+        try {
+          this.session.configure(message.config);
+          this.reportTabState();
+        } catch (_error) {
+          this.nativePort?.disconnect();
+        }
+        return;
+      }
+      if (!requestIdPattern.test(message.id || "")) {
+        return;
+      }
+      const id = message.id;
+      if (message.type === "command") {
+        this.commands.handle(message).then((data) => this.postResult(id, true, data)).catch((error) => this.postResult(id, false, error));
+        return;
+      }
+      if (message.type === "upload_start") {
+        try {
+          this.uploadTransfers.start({
+            id,
+            debtUuid: message.debtUuid,
+            fileName: message.fileName,
+            mimeType: message.mimeType,
+            size: message.size,
+            sha256: message.sha256,
+            chunkCount: message.chunkCount
+          }, this.session.optionalConfig?.maxFileBytes || 0, Date.now());
+          this.scheduleUploadExpiry();
+        } catch (error) {
+          this.postResult(id, false, error);
+        }
+        return;
+      }
+      if (message.type === "upload_chunk") {
+        try {
+          this.uploadTransfers.append(id, message.index, message.data, Date.now());
+        } catch (error) {
+          if (!this.uploadTransfers.hasActiveTransfer()) {
+            this.clearUploadExpiry();
+          }
+          this.postResult(id, false, error);
+        }
+        return;
+      }
+      if (message.type === "upload_end") {
+        let upload;
+        try {
+          upload = this.uploadTransfers.complete(id, Date.now());
+          this.clearUploadExpiry();
+        } catch (error) {
+          if (!this.uploadTransfers.hasActiveTransfer()) {
+            this.clearUploadExpiry();
+          }
+          this.postResult(id, false, error);
+          return;
+        }
+        this.finishUpload(upload).then((data) => this.postResult(id, true, data)).catch((error) => this.postResult(id, false, error)).finally(() => this.uploadTransfers.finish(id));
+      }
+    }
+  }
+
+  // src/extension/tab-registry.ts
+  class TabRegistry {
+    staticConfig;
+    session;
+    events;
+    connections = new Map;
+    authRequests = new Map;
+    constructor(staticConfig, session, events) {
+      this.staticConfig = staticConfig;
+      this.session = session;
+      this.events = events;
+    }
+    get size() {
+      return this.connections.size;
+    }
+    register(port) {
+      const tabId = port.sender?.tab?.id;
+      const href = port.sender?.tab?.url || "";
+      const groupPathSegment = groupPathSegmentFromUrl(href, this.staticConfig.accountOrigin);
+      if (port.name !== "holvi-tab" || !Number.isInteger(tabId) || !groupPathSegment) {
+        port.disconnect();
+        return;
+      }
+      const validTabId = tabId;
+      this.connections.get(validTabId)?.port.disconnect();
+      this.connections.set(validTabId, { port, href, groupPathSegment });
+      port.onMessage.addListener((message) => this.handleContentMessage(validTabId, message));
+      port.onDisconnect.addListener(() => this.disconnect(validTabId, port));
+      this.events.connectionAvailable();
+    }
+    configuredTab() {
+      const config = this.session.optionalConfig;
+      if (!config) {
+        return null;
+      }
+      for (const entry of this.connections) {
+        if (entry[1].groupPathSegment === config.groupPathSegment) {
+          return entry;
+        }
+      }
+      return null;
+    }
+    requestAuth() {
+      const tab = this.configuredTab();
+      if (!tab) {
+        return Promise.reject(new Error("Open the configured signed-in Holvi group tab in Chrome."));
+      }
+      const [tabId, connection] = tab;
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve, reject) => {
+        const timeout = self.setTimeout(() => {
+          this.authRequests.delete(requestId);
+          reject(new Error("The Holvi tab did not provide session authentication."));
+        }, 5000);
+        this.authRequests.set(requestId, { resolve, reject, timeout, tabId });
+        connection.port.postMessage({ type: "auth_request", requestId });
+      });
+    }
+    handleContentMessage(tabId, value) {
+      const message = value;
+      if (!message || typeof message !== "object") {
+        return;
+      }
+      if (message.type === "tab_hello") {
+        const groupPathSegment = groupPathSegmentFromUrl(message.href || "", this.staticConfig.accountOrigin);
+        const connection = this.connections.get(tabId);
+        if (!connection || !groupPathSegment) {
+          connection?.port.disconnect();
+          return;
+        }
+        connection.href = message.href || "";
+        connection.groupPathSegment = groupPathSegment;
+        this.events.connectionAvailable();
+        this.events.stateChanged();
+        return;
+      }
+      if (message.type !== "auth_response" || !message.requestId) {
+        return;
+      }
+      const pending = this.authRequests.get(message.requestId);
+      if (!pending || pending.tabId !== tabId) {
+        return;
+      }
+      this.authRequests.delete(message.requestId);
+      clearTimeout(pending.timeout);
+      const config = this.session.optionalConfig;
+      if (!config || message.origin !== this.staticConfig.accountOrigin || groupPathSegmentFromUrl(message.href || "", this.staticConfig.accountOrigin) !== config.groupPathSegment) {
+        pending.reject(new Error("The bridge tab is outside the configured Holvi group."));
+        return;
+      }
+      const token = typeof message.token === "string" ? message.token : "";
+      if (token.length < 32 || token.length > 8192 || token.split(".").length !== 3) {
+        pending.reject(new Error("Sign in to Holvi or reload the configured group tab."));
+        return;
+      }
+      pending.resolve({
+        token,
+        csrfToken: typeof message.csrfToken === "string" ? message.csrfToken : ""
+      });
+    }
+    disconnect(tabId, port) {
+      if (this.connections.get(tabId)?.port !== port) {
+        return;
+      }
+      this.connections.delete(tabId);
+      for (const [requestId, pending] of this.authRequests) {
+        if (pending.tabId === tabId) {
+          clearTimeout(pending.timeout);
+          pending.reject(new Error("The Holvi tab disconnected."));
+          this.authRequests.delete(requestId);
+        }
+      }
+      this.events.stateChanged();
+    }
+  }
+
+  // src/extension/upload-workflow.ts
+  class UploadWorkflow {
+    session;
+    api;
+    sleep;
+    constructor(session, api, sleep = (delay) => new Promise((resolve) => self.setTimeout(resolve, delay))) {
+      this.session = session;
+      this.api = api;
+      this.sleep = sleep;
+    }
+    async uploadReceipt(auth, upload) {
+      this.session.requireCapabilities("transactions.read", "attachments.write");
+      const debtUuid = validateUuid(upload.debtUuid, "debt");
+      const before = projectUploadDebtRead(await this.api.request(auth, this.api.debtPath(debtUuid)), debtUuid);
+      const beforeCount = before.attachmentCount;
+      if (beforeCount !== 0) {
+        throw new Error(`Upload refused because the transaction has ${beforeCount} attachment(s).`);
+      }
+      if (typeof before.code !== "string" || !before.code) {
+        throw new Error("Holvi did not return the object code required for upload.");
+      }
+      const bytes = await verifyUploadTransfer(upload);
+      const form = new FormData;
+      form.append("content_type", "debt");
+      form.append("object_code", before.code);
+      form.append("attachment_file", new File([bytes], upload.fileName, { type: upload.mimeType }));
+      await this.api.request(auth, `${this.session.apiRoot()}attachment/formpost/`, {
+        method: "POST",
+        body: form
+      });
+      let afterCount = 0;
+      for (const delay of [0, 250, 500, 1000, 2000]) {
+        if (delay) {
+          await this.sleep(delay);
+        }
+        const after = projectUploadDebtRead(await this.api.request(auth, this.api.debtPath(debtUuid)), debtUuid);
+        afterCount = after.attachmentCount;
+        if (afterCount > 0) {
+          break;
+        }
+      }
+      if (afterCount !== 1) {
+        throw new Error(`Holvi accepted the upload but verification found ${afterCount} attachment(s). Inspect the transaction before retrying.`);
+      }
+      return {
+        debtUuid,
+        fileName: upload.fileName,
+        sha256: upload.sha256,
+        attachmentCountBefore: beforeCount,
+        attachmentCountAfter: afterCount
+      };
+    }
+  }
+
   // src/extension/background.ts
   importScripts("config.js");
   var staticConfig = _HOLVI_AGENT_BRIDGE_STATIC_CONFIG;
-  var uuidPattern3 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  var requestIdPattern = /^[0-9a-f-]{16,64}$/i;
-  var runtimeConfig = null;
-  var nativePort = null;
-  var reconnectTimer = null;
-  var uploadExpiryTimer = null;
-  var uploadTransfers = new UploadTransferLifecycle;
-  var tabConnections = new Map;
-  var authRequests = new Map;
-  function groupPathSegmentFromUrl(value) {
-    try {
-      const url = new URL(value);
-      if (url.origin !== staticConfig.accountOrigin) {
-        return "";
-      }
-      const match = url.pathname.match(/^\/group\/([^/]+)(?:\/|$)/);
-      return match?.[1] ? decodeURIComponent(match[1]) : "";
-    } catch {
-      return "";
-    }
-  }
-  function validateRuntimeConfig(value) {
-    const config = value;
-    const groupParts = (config.groupPathSegment || "").match(/^([^/+]+)\+([^/]+)$/);
-    const groupPoolHandle = groupParts?.[1] || "";
-    if (!groupParts || groupPoolHandle !== config.poolHandle || !uuidPattern3.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < 1 || (config.maxFileBytes || 0) > staticConfig.maxFileBytes) {
-      throw new Error("The native host supplied an invalid Holvi account boundary.");
-    }
-    return config;
-  }
-  function requireCapabilities(...capabilities) {
-    if (!runtimeConfig || capabilities.some((capability) => !runtimeConfig?.capabilities.includes(capability))) {
-      throw new Error(`Action requires capabilities: ${capabilities.join(", ")}.`);
-    }
-  }
-  function configuredTab() {
-    if (!runtimeConfig) {
-      return null;
-    }
-    for (const entry of tabConnections) {
-      if (entry[1].groupPathSegment === runtimeConfig.groupPathSegment) {
-        return entry;
-      }
-    }
-    return null;
-  }
-  function postNative(message) {
-    if (!nativePort) {
-      throw new Error("The local Holvi helper is disconnected.");
-    }
-    nativePort.postMessage(message);
-  }
-  function reportTabState() {
-    if (!nativePort || !runtimeConfig) {
-      return;
-    }
-    const tab = configuredTab();
-    nativePort.postMessage(tab ? { type: "tab_ready", tabId: tab[0] } : { type: "tab_unavailable" });
-  }
-  function clearUploadExpiry() {
-    if (uploadExpiryTimer !== null) {
-      clearTimeout(uploadExpiryTimer);
-      uploadExpiryTimer = null;
-    }
-  }
-  function scheduleUploadExpiry() {
-    clearUploadExpiry();
-    uploadExpiryTimer = self.setTimeout(() => {
-      uploadExpiryTimer = null;
-      const expiredId = uploadTransfers.expire(Date.now());
-      if (expiredId) {
-        postResult(expiredId, false, new Error("Receipt transfer expired."));
-      }
-    }, uploadTransferExpiryMs);
-  }
-  function postResult(id, ok, value) {
-    try {
-      postNative(ok ? { type: "result", id, ok, data: value } : {
-        type: "result",
-        id,
-        ok,
-        error: value instanceof Error ? value.message : String(value)
-      });
-    } catch {}
-  }
-  function connectNative() {
-    if (nativePort || tabConnections.size === 0) {
-      return;
-    }
-    nativePort = chrome.runtime.connectNative(staticConfig.nativeHostName);
-    nativePort.onMessage.addListener(handleNativeMessage);
-    nativePort.onDisconnect.addListener(() => {
-      nativePort = null;
-      runtimeConfig = null;
-      uploadTransfers.cancel();
-      clearUploadExpiry();
-      if (tabConnections.size > 0 && reconnectTimer === null) {
-        reconnectTimer = self.setTimeout(() => {
-          reconnectTimer = null;
-          connectNative();
-        }, 1000);
-      }
-    });
-  }
-  function requestAuth() {
-    const tab = configuredTab();
-    if (!tab) {
-      return Promise.reject(new Error("Open the configured signed-in Holvi group tab in Chrome."));
-    }
-    const [tabId, connection] = tab;
-    const requestId = crypto.randomUUID();
-    return new Promise((resolve, reject) => {
-      const timeout = self.setTimeout(() => {
-        authRequests.delete(requestId);
-        reject(new Error("The Holvi tab did not provide session authentication."));
-      }, 5000);
-      authRequests.set(requestId, { resolve, reject, timeout, tabId });
-      connection.port.postMessage({ type: "auth_request", requestId });
-    });
-  }
-  function handleContentMessage(tabId, value) {
-    const message = value;
-    if (!message || typeof message !== "object") {
-      return;
-    }
-    if (message.type === "tab_hello") {
-      const groupPathSegment = groupPathSegmentFromUrl(message.href || "");
-      const connection = tabConnections.get(tabId);
-      if (!connection || !groupPathSegment) {
-        connection?.port.disconnect();
-        return;
-      }
-      connection.href = message.href || "";
-      connection.groupPathSegment = groupPathSegment;
-      connectNative();
-      reportTabState();
-      return;
-    }
-    if (message.type !== "auth_response" || !message.requestId) {
-      return;
-    }
-    const pending = authRequests.get(message.requestId);
-    if (!pending || pending.tabId !== tabId) {
-      return;
-    }
-    authRequests.delete(message.requestId);
-    clearTimeout(pending.timeout);
-    if (!runtimeConfig || message.origin !== staticConfig.accountOrigin || groupPathSegmentFromUrl(message.href || "") !== runtimeConfig.groupPathSegment) {
-      pending.reject(new Error("The bridge tab is outside the configured Holvi group."));
-      return;
-    }
-    const token = typeof message.token === "string" ? message.token : "";
-    if (token.length < 32 || token.length > 8192 || token.split(".").length !== 3) {
-      pending.reject(new Error("Sign in to Holvi or reload the configured group tab."));
-      return;
-    }
-    pending.resolve({
-      token,
-      csrfToken: typeof message.csrfToken === "string" ? message.csrfToken : ""
-    });
-  }
-  chrome.runtime.onConnect.addListener((port) => {
-    const tabId = port.sender?.tab?.id;
-    const href = port.sender?.tab?.url || "";
-    const groupPathSegment = groupPathSegmentFromUrl(href);
-    if (port.name !== "holvi-tab" || !Number.isInteger(tabId) || !groupPathSegment) {
-      port.disconnect();
-      return;
-    }
-    const validTabId = tabId;
-    tabConnections.get(validTabId)?.port.disconnect();
-    tabConnections.set(validTabId, { port, href, groupPathSegment });
-    port.onMessage.addListener((message) => handleContentMessage(validTabId, message));
-    port.onDisconnect.addListener(() => {
-      if (tabConnections.get(validTabId)?.port === port) {
-        tabConnections.delete(validTabId);
-        for (const [requestId, pending] of authRequests) {
-          if (pending.tabId === validTabId) {
-            clearTimeout(pending.timeout);
-            pending.reject(new Error("The Holvi tab disconnected."));
-            authRequests.delete(requestId);
-          }
-        }
-        reportTabState();
-      }
-    });
-    connectNative();
+  var session = new BridgeSession(staticConfig);
+  var api = new HolviApi(staticConfig, session);
+  var nativeBridge;
+  var tabs;
+  tabs = new TabRegistry(staticConfig, session, {
+    connectionAvailable: () => nativeBridge.connect(),
+    stateChanged: () => nativeBridge.reportTabState()
   });
-  function configuredApiRoot() {
-    if (!runtimeConfig) {
-      throw new Error("The local bridge has no configured Holvi account.");
-    }
-    return `/api/pool/${encodeURIComponent(runtimeConfig.poolHandle)}/`;
-  }
-  async function apiRequest(auth, apiPath, options = {}) {
-    if (!apiPath.startsWith(configuredApiRoot())) {
-      throw new Error("Refused an API path outside the configured Holvi account.");
-    }
-    const headers = new Headers(options.headers || {});
-    headers.set("Accept", "application/json");
-    headers.set("Authorization", `Bearer ${auth.token}`);
-    if (auth.csrfToken) {
-      headers.set("X-CSRFToken", auth.csrfToken);
-    }
-    const response = await fetch(`${staticConfig.apiOrigin}${apiPath}`, {
-      ...options,
-      headers,
-      credentials: "include",
-      cache: "no-store",
-      redirect: "error"
-    });
-    const contentType = response.headers.get("content-type") || "";
-    const body = contentType.includes("application/json") ? await response.json() : await response.text();
-    if (!response.ok) {
-      const detail = typeof body === "string" ? body.slice(0, 300) : JSON.stringify(body).slice(0, 300);
-      throw new Error(`Holvi API returned ${response.status}: ${detail}`);
-    }
-    return body;
-  }
-  function feedPath(cursor = "", missingAttachments = false) {
-    if (!runtimeConfig) {
-      throw new Error("The local bridge has no configured Holvi account.");
-    }
-    const query = new URLSearchParams({
-      timeline: "past",
-      payment_account: runtimeConfig.paymentAccountUuid
-    });
-    if (missingAttachments) {
-      query.set("missing_attachments", "true");
-    }
-    if (cursor) {
-      query.set("cursor", cursor);
-    }
-    return `${configuredApiRoot()}ux/payments-feed/?${query}`;
-  }
-  function asString(value) {
-    return typeof value === "string" ? value : "";
-  }
-  function withinDateRange(payment2, from, to) {
-    const date = asString(payment2.date);
-    return Boolean(date) && (!from || date >= from) && (!to || date <= to);
-  }
-  async function listTransactions(auth, params) {
-    const results = [];
-    const seenCursors = new Set;
-    const missingAttachments = params.missingAttachments === true;
-    let cursor = "";
-    let pages = 0;
-    do {
-      const page = projectTransactionFeedPage(await apiRequest(auth, feedPath(cursor, missingAttachments)));
-      for (const item of page.results) {
-        if (withinDateRange(item, asString(params.from), asString(params.to))) {
-          results.push(item);
-        }
-      }
-      pages += 1;
-      if (results.length > staticConfig.maxTransactionResults) {
-        throw new Error("The transaction listing exceeded its result limit.");
-      }
-      if (pages >= staticConfig.maxTransactionPages && page.hasMore) {
-        throw new Error("The transaction listing exceeded its page limit.");
-      }
-      cursor = page.nextCursor;
-      if (cursor && seenCursors.has(cursor)) {
-        throw new Error("Holvi repeated a pagination cursor.");
-      }
-      seenCursors.add(cursor);
-    } while (cursor);
-    return projectTransactionListing({
-      pages,
-      count: results.length,
-      missingAttachments,
-      results
-    });
-  }
-  function validateUuid(value, resource) {
-    if (!uuidPattern3.test(value || "")) {
-      throw new Error(`A valid Holvi ${resource} UUID is required.`);
-    }
-    return value;
-  }
-  function debtPath(debtUuid) {
-    return `${configuredApiRoot()}debt/${encodeURIComponent(validateUuid(debtUuid, "debt"))}/`;
-  }
-  async function previewDebt(auth, debtUuid) {
-    const validUuid = validateUuid(debtUuid, "debt");
-    return projectDebtPreview(await apiRequest(auth, debtPath(validUuid)), validUuid);
-  }
-  async function bookkeepingDebt(auth, debtUuid) {
-    const validUuid = validateUuid(debtUuid, "debt");
-    return projectBookkeepingDebt(await apiRequest(auth, debtPath(validUuid)), validUuid);
-  }
-  async function bookkeepingCategories(auth) {
-    return projectCategories(await apiRequest(auth, `${configuredApiRoot()}category/`));
-  }
-  async function bookkeepingSuggestions(auth, debtUuid) {
-    const validUuid = validateUuid(debtUuid, "debt");
-    return projectSuggestions(await apiRequest(auth, `${debtPath(validUuid)}haip/bookkeeping-suggestions/`), validUuid);
-  }
-  async function recentAudit(auth, limit) {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 25) {
-      throw new Error("Activity limit must be between 1 and 25.");
-    }
-    return projectAuditPage(await apiRequest(auth, `${configuredApiRoot()}log-feed/?o=-timestamp&page_size=25`), limit);
-  }
-  async function uploadReceipt(auth, upload) {
-    requireCapabilities("transactions.read", "attachments.write");
-    const debtUuid = validateUuid(upload.debtUuid, "debt");
-    const before = projectUploadDebtRead(await apiRequest(auth, debtPath(debtUuid)), debtUuid);
-    const beforeCount = before.attachmentCount;
-    if (beforeCount !== 0) {
-      throw new Error(`Upload refused because the transaction has ${beforeCount} attachment(s).`);
-    }
-    if (typeof before?.code !== "string" || !before.code) {
-      throw new Error("Holvi did not return the object code required for upload.");
-    }
-    const bytes = await verifyUploadTransfer(upload);
-    const form = new FormData;
-    form.append("content_type", "debt");
-    form.append("object_code", before.code);
-    form.append("attachment_file", new File([bytes], upload.fileName, { type: upload.mimeType }));
-    await apiRequest(auth, `${configuredApiRoot()}attachment/formpost/`, {
-      method: "POST",
-      body: form
-    });
-    let afterCount = 0;
-    for (const delay of [0, 250, 500, 1000, 2000]) {
-      if (delay) {
-        await new Promise((resolve) => self.setTimeout(resolve, delay));
-      }
-      const after = projectUploadDebtRead(await apiRequest(auth, debtPath(debtUuid)), debtUuid);
-      afterCount = after.attachmentCount;
-      if (afterCount > 0) {
-        break;
-      }
-    }
-    if (afterCount !== 1) {
-      throw new Error(`Holvi accepted the upload but verification found ${afterCount} attachment(s). Inspect the transaction before retrying.`);
-    }
-    return {
-      debtUuid,
-      fileName: upload.fileName,
-      sha256: upload.sha256,
-      attachmentCountBefore: beforeCount,
-      attachmentCountAfter: afterCount
-    };
-  }
-  async function doctor(auth) {
-    const base = {
-      connected: true,
-      groupPathSegment: runtimeConfig?.groupPathSegment,
-      poolHandle: runtimeConfig?.poolHandle,
-      paymentAccountUuid: runtimeConfig?.paymentAccountUuid,
-      capabilities: runtimeConfig?.capabilities
-    };
-    if (runtimeConfig?.capabilities.includes("transactions.read")) {
-      requireCapabilities("transactions.read");
-      const page = projectTransactionFeedPage(await apiRequest(auth, feedPath()));
-      return {
-        ...base,
-        probeAction: "transactions",
-        firstPageResults: page.results.length
-      };
-    }
-    if (runtimeConfig?.capabilities.includes("bookkeeping.read")) {
-      requireCapabilities("bookkeeping.read");
-      const categories = await bookkeepingCategories(auth);
-      return {
-        ...base,
-        probeAction: "bookkeeping.categories",
-        categoryCount: categories.length
-      };
-    }
-    if (runtimeConfig?.capabilities.includes("audit.read")) {
-      requireCapabilities("audit.read");
-      const audit = await recentAudit(auth, 1);
-      return {
-        ...base,
-        probeAction: "audit.list",
-        recentActivityCount: audit.returnedCount
-      };
-    }
-    return { ...base, probeAction: null };
-  }
-  var commandHandlers = {
-    doctor: (auth) => doctor(auth),
-    transactions: (auth, params) => listTransactions(auth, params),
-    preview: (auth, params) => previewDebt(auth, asString(params.debtUuid)),
-    "bookkeeping.get": (auth, params) => bookkeepingDebt(auth, asString(params.debtUuid)),
-    "bookkeeping.categories": (auth) => bookkeepingCategories(auth),
-    "bookkeeping.suggestions": (auth, params) => bookkeepingSuggestions(auth, asString(params.debtUuid)),
-    "audit.list": (auth, params) => recentAudit(auth, params.limit)
-  };
-  async function handleCommand(message) {
-    const action = message.action || "";
-    if (!isBridgeAction(action)) {
-      throw new Error("The local helper requested an unsupported action.");
-    }
-    const requirements = requiredCapabilities(action);
-    if (!requirements) {
-      throw new Error("The local helper requested an unsupported action.");
-    }
-    requireCapabilities(...requirements);
-    if (action === "upload") {
-      throw new Error("Receipt uploads require transfer messages.");
-    }
-    const auth = await requestAuth();
-    return commandHandlers[action](auth, message.params || {});
-  }
-  async function finishUpload(upload) {
-    const auth = await requestAuth();
-    return uploadReceipt(auth, upload);
-  }
-  function handleNativeMessage(value) {
-    const message = value;
-    if (!message || typeof message !== "object") {
-      return;
-    }
-    if (message.type === "host_ready") {
-      try {
-        runtimeConfig = validateRuntimeConfig(message.config);
-        reportTabState();
-      } catch (_error) {
-        nativePort?.disconnect();
-      }
-      return;
-    }
-    if (!requestIdPattern.test(message.id || "")) {
-      return;
-    }
-    const id = message.id;
-    if (message.type === "command") {
-      handleCommand(message).then((data) => postResult(id, true, data)).catch((error) => postResult(id, false, error));
-      return;
-    }
-    if (message.type === "upload_start") {
-      try {
-        uploadTransfers.start({
-          id,
-          debtUuid: message.debtUuid,
-          fileName: message.fileName,
-          mimeType: message.mimeType,
-          size: message.size,
-          sha256: message.sha256,
-          chunkCount: message.chunkCount
-        }, runtimeConfig?.maxFileBytes || 0, Date.now());
-        scheduleUploadExpiry();
-      } catch (error) {
-        postResult(id, false, error);
-      }
-      return;
-    }
-    if (message.type === "upload_chunk") {
-      try {
-        uploadTransfers.append(id, message.index, message.data, Date.now());
-      } catch (error) {
-        if (!uploadTransfers.hasActiveTransfer()) {
-          clearUploadExpiry();
-        }
-        postResult(id, false, error);
-      }
-      return;
-    }
-    if (message.type === "upload_end") {
-      let upload;
-      try {
-        upload = uploadTransfers.complete(id, Date.now());
-        clearUploadExpiry();
-      } catch (error) {
-        if (!uploadTransfers.hasActiveTransfer()) {
-          clearUploadExpiry();
-        }
-        postResult(id, false, error);
-        return;
-      }
-      finishUpload(upload).then((data) => postResult(id, true, data)).catch((error) => postResult(id, false, error)).finally(() => uploadTransfers.finish(id));
-    }
-  }
+  var commands = new CommandService(session, api, () => tabs.requestAuth());
+  var uploads = new UploadWorkflow(session, api);
+  nativeBridge = new NativeBridge(staticConfig, session, tabs, commands, uploads);
+  chrome.runtime.onConnect.addListener((port) => tabs.register(port));
 })();
