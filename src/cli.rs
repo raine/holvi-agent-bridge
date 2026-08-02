@@ -1078,7 +1078,6 @@ mod tests {
     #[test]
     fn rejects_stale_doctor_identity_and_scope() {
         let config = BridgeConfig {
-            version: 2,
             group_path_segment: "AbC123+example-company".into(),
             pool_handle: "AbC123".into(),
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),

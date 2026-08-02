@@ -1,6 +1,5 @@
 {
   "versions": {
-    "config": 2,
     "signedRequest": 1,
     "nativeProtocol": 1,
     "host": "0.1.0",

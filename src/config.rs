@@ -12,7 +12,6 @@ use crate::filesystem::{
     current_user_uid, has_mode_0600, is_owned_by_current_user, is_regular_file,
 };
 
-pub const CONFIG_VERSION: u8 = 2;
 pub const EXTENSION_ID: &str = "oeedcemphbobfehfmcllmjhhhjgahgeb";
 pub const EXTENSION_ORIGIN: &str = "chrome-extension://oeedcemphbobfehfmcllmjhhhjgahgeb/";
 pub const HOST_NAME: &str = "app.holvi_agent_bridge";
@@ -29,7 +28,6 @@ pub const SUPPORTED_CAPABILITIES: [&str; 4] = [
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeConfig {
-    pub version: u8,
     pub group_path_segment: String,
     pub pool_handle: String,
     pub payment_account_uuid: String,
@@ -51,10 +49,6 @@ pub struct PublicBridgeConfig<'a> {
 
 impl BridgeConfig {
     pub fn validate(self) -> Result<Self> {
-        ensure!(
-            self.version == CONFIG_VERSION,
-            "Holvi Agent Bridge config version is invalid."
-        );
         ensure!(
             is_lower_hex(&self.hmac_secret, 64),
             "Holvi Agent Bridge config has no valid request secret."
@@ -215,7 +209,6 @@ mod tests {
 
     fn config(roots: Vec<PathBuf>) -> BridgeConfig {
         BridgeConfig {
-            version: 2,
             group_path_segment: "AbC123+example-company".into(),
             pool_handle: "AbC123".into(),
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),

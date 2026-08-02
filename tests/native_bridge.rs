@@ -36,7 +36,6 @@ impl HostProcess {
         let directory = tempfile::tempdir().unwrap();
         let config_path = directory.path().join("config.json");
         let config = BridgeConfig {
-            version: 2,
             group_path_segment: "AbC123+example".into(),
             pool_handle: "AbC123".into(),
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),

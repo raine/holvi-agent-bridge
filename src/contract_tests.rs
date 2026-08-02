@@ -3,8 +3,8 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::config::{
-    ACCOUNT_ORIGIN, CONFIG_VERSION, DEFAULT_MAX_FILE_BYTES, EXTENSION_ID, EXTENSION_ORIGIN,
-    HOST_NAME, MIN_FILE_BYTES,
+    ACCOUNT_ORIGIN, DEFAULT_MAX_FILE_BYTES, EXTENSION_ID, EXTENSION_ORIGIN, HOST_NAME,
+    MIN_FILE_BYTES,
 };
 use crate::host::{FILE_CHUNK_BYTES, REQUEST_TIMEOUT};
 use crate::protocol::{
@@ -31,7 +31,6 @@ fn strings(value: &Value) -> Vec<&str> {
 fn native_constants_match_the_bridge_contract() {
     let contract = contract();
 
-    assert_eq!(u64::from(CONFIG_VERSION), contract["versions"]["config"]);
     assert_eq!(
         u64::from(SIGNED_REQUEST_VERSION),
         contract["versions"]["signedRequest"]
