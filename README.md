@@ -10,18 +10,28 @@ so you can choose which parts of Holvi the agent may use.
 ## How it works
 
 ```mermaid
-flowchart TD
-    Agent["Local agent"] -->|"Named operation"| CLI["holvi CLI"]
-    CLI -->|"Authenticated local request"| Host["Native host"]
-    Host -->|"Native messaging"| Extension["Browser extension"]
-    Tab["Signed-in Holvi tab"] -->|"Session authentication"| Extension
-    Extension -->|"Account-scoped request"| API["Holvi API"]
+sequenceDiagram
+    participant Agent as Local agent
+    participant CLI as holvi CLI
+    participant Host as Native host
+    participant Extension as Browser extension
+    participant Tab as Signed-in Holvi tab
+    participant API as Holvi API
+
+    Agent->>CLI: Named operation
+    CLI->>Host: Authenticated local request
+    Host->>Extension: Native message
+    Extension->>Tab: Request session authentication
+    Tab-->>Extension: Session authentication
+    Extension->>API: Account-scoped request
+    API-->>Extension: Response
+    Extension-->>Host: Projected result
+    Host-->>CLI: Result
+    CLI-->>Agent: Output
 ```
 
 Your Holvi sign-in stays in the browser, and the agent can use only the features
-you enable. Responses return along the same path. The native host and browser
-extension both check capabilities, and the extension returns projected data
-rather than raw API responses.
+you enable.
 
 ## Features
 
