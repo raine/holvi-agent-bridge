@@ -2,11 +2,15 @@ use serde::ser::{Serialize, SerializeMap, Serializer};
 
 use crate::protocol::Action;
 
-pub const ACTION_CAPABILITIES: [(&str, &[&str]); 8] = [
+pub const ACTION_CAPABILITIES: [(&str, &[&str]); 9] = [
     ("doctor", &[]),
     ("transactions", &["transactions.read"]),
     ("preview", &["transactions.read"]),
     ("upload", &["transactions.read", "attachments.write"]),
+    (
+        "attachments.delete",
+        &["transactions.read", "attachments.delete"],
+    ),
     ("bookkeeping.get", &["bookkeeping.read"]),
     ("bookkeeping.categories", &["bookkeeping.read"]),
     ("bookkeeping.suggestions", &["bookkeeping.read"]),
@@ -18,6 +22,7 @@ pub fn required_capabilities(action: &Action) -> &'static [&'static str] {
         Action::HostRestart(_) | Action::Doctor(_) => &[],
         Action::Transactions(_) | Action::Preview(_) => &["transactions.read"],
         Action::Upload(_) => &["transactions.read", "attachments.write"],
+        Action::AttachmentDelete(_) => &["transactions.read", "attachments.delete"],
         Action::BookkeepingGet(_)
         | Action::BookkeepingCategories(_)
         | Action::BookkeepingSuggestions(_) => &["bookkeeping.read"],
@@ -73,7 +78,8 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::protocol::{
-        AuditListParams, DebtParams, EmptyParams, TransactionParams, UploadParams,
+        AttachmentDeleteParams, AuditListParams, DebtParams, EmptyParams, TransactionParams,
+        UploadParams,
     };
 
     use super::*;
@@ -123,6 +129,11 @@ mod tests {
                 file_path: PathBuf::new(),
                 confirmed: true,
             }),
+            Action::AttachmentDelete(AttachmentDeleteParams {
+                debt_uuid: String::new(),
+                attachment_code: String::new(),
+                confirmed: false,
+            }),
             Action::BookkeepingGet(DebtParams {
                 debt_uuid: String::new(),
             }),
@@ -161,6 +172,19 @@ mod tests {
         let audit = enabled_actions(&["audit.read".into()]);
         assert_eq!(audit.get("audit.list"), Some(true));
         assert_eq!(audit.get("bookkeeping.get"), Some(false));
+    }
+
+    #[test]
+    fn attachment_deletion_requires_its_destructive_capability_and_read_scope() {
+        let read_only = enabled_actions(&["transactions.read".into()]);
+        assert_eq!(read_only.get("attachments.delete"), Some(false));
+
+        let delete_only = enabled_actions(&["attachments.delete".into()]);
+        assert_eq!(delete_only.get("attachments.delete"), Some(false));
+
+        let enabled = enabled_actions(&["transactions.read".into(), "attachments.delete".into()]);
+        assert_eq!(enabled.get("attachments.delete"), Some(true));
+        assert_eq!(enabled.get("upload"), Some(false));
     }
 
     #[test]

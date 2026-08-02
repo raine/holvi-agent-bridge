@@ -8,6 +8,7 @@ import {
 } from "./policy.js";
 import {
   projectAuditPage,
+  projectAttachmentDeletionDebt,
   projectBookkeepingDebt,
   projectCategories,
   projectDebtPreview,
@@ -34,7 +35,9 @@ function debt() {
     subtype: "card_purchase",
     payment_account_uuid: paymentAccountUuid,
     connection_uuid: null,
-    attachments: [{}],
+    attachments: [
+      { code: "ATTACHMENT-1", title: "receipt.pdf", format: "pdf" },
+    ],
     items: [
       {
         uuid: itemUuid,
@@ -103,6 +106,7 @@ describe("capability policy", () => {
       new Set([
         "transactions.read",
         "attachments.write",
+        "attachments.delete",
         "bookkeeping.read",
         "audit.read",
       ]),
@@ -208,6 +212,13 @@ describe("debt read projections", () => {
       amount: "24.80",
       currency: "EUR",
       attachmentCount: 1,
+      attachments: [
+        {
+          attachmentCode: "ATTACHMENT-1",
+          title: "receipt.pdf",
+          format: "pdf",
+        },
+      ],
       bookkeepingStatus: "complete",
     });
     expect(
@@ -217,6 +228,50 @@ describe("debt read projections", () => {
       code: "DEBT-1",
       attachmentCount: 1,
     });
+  });
+
+  test("verifies attachment deletion debt and payment account scope", () => {
+    expect(
+      projectAttachmentDeletionDebt(
+        debt(),
+        debtUuid,
+        "33333333-3333-4333-8333-333333333333",
+      ),
+    ).toMatchObject({
+      debtUuid,
+      paymentAccountUuid: "33333333-3333-4333-8333-333333333333",
+      attachments: [
+        {
+          attachmentCode: "ATTACHMENT-1",
+          title: "receipt.pdf",
+          format: "pdf",
+        },
+      ],
+    });
+
+    expect(() =>
+      projectAttachmentDeletionDebt(
+        debt(),
+        debtUuid,
+        "99999999-9999-4999-8999-999999999999",
+      ),
+    ).toThrow("outside the configured payment account");
+  });
+
+  test("rejects ambiguous or malformed attachment identities", () => {
+    const duplicate = debt();
+    duplicate.attachments.push({ ...duplicate.attachments[0]! });
+    expect(() =>
+      projectDebtPreview(duplicate, debtUuid, paymentAccountUuid),
+    ).toThrow("ambiguous");
+
+    expect(() =>
+      projectDebtPreview(
+        { ...debt(), attachments: [{ code: "ATTACHMENT-1" }] },
+        debtUuid,
+        paymentAccountUuid,
+      ),
+    ).toThrow("attachment title");
   });
 
   test("rejects malformed shapes and debt identity mismatches", () => {

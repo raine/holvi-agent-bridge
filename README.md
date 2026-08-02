@@ -41,6 +41,8 @@ you enable.
 - View a limited page of recent account activity, newest first.
 - Preview receipt attachments, require confirmation before upload, and check the
   attachment count before and after the upload.
+- Preview one debt's attachment metadata, delete one explicitly selected
+  attachment, and verify the exact remaining attachment state.
 - Keep Holvi credentials in the browser and grant access one capability at a
   time.
 - Install a skill for Claude Code, OpenCode, or Codex.
@@ -116,6 +118,7 @@ holvi install \
   --account '11111111-1111-4111-8111-111111111111' \
   --capability transactions.read \
   --capability attachments.write \
+  --capability attachments.delete \
   --receipt-root '/absolute/path/to/receipts'
 ```
 
@@ -153,15 +156,18 @@ holvi doctor
 
 The private config lists the capabilities available to the agent.
 
-| Capability          | Operations                                                           |
-| ------------------- | -------------------------------------------------------------------- |
-| `transactions.read` | Check the connection, list transactions, and inspect one transaction |
-| `attachments.write` | Attach a local file after preflight checks and verify the result     |
-| `bookkeeping.read`  | Inspect accounting details, categories, and category suggestions     |
-| `audit.read`        | Inspect up to 25 recent pool activity entries                         |
+| Capability           | Operations                                                           |
+| -------------------- | -------------------------------------------------------------------- |
+| `transactions.read`  | Check the connection, list transactions, and inspect one transaction |
+| `attachments.write`  | Attach a local file after preflight checks and verify the result     |
+| `attachments.delete` | Delete one selected debt attachment after preview and verification   |
+| `bookkeeping.read`   | Inspect accounting details, categories, and category suggestions     |
+| `audit.read`         | Inspect up to 25 recent pool activity entries                         |
 
-`attachments.write` operations also require `transactions.read` because the
-bridge checks attachment state immediately before and after a write.
+Attachment writes and deletions also require `transactions.read` because the
+bridge reads and verifies debt state within the configured payment account
+immediately before and after each write. `attachments.delete` is separate from
+`attachments.write` because deletion is irreversible.
 
 Inspect the capabilities and operations enabled on a machine:
 
@@ -216,6 +222,32 @@ The bridge reads the transaction immediately before upload and refuses to
 continue if any attachment exists. After Holvi accepts the file, it reads the
 transaction again and succeeds only when the attachment count is exactly one.
 
+Debt previews include a bounded `attachments` list with each attachment's
+`attachmentCode`, `title`, and `format`. Select one exact code, then preview its
+deletion without `--yes`:
+
+```sh
+holvi attachments delete \
+  --debt '11111111-1111-4111-8111-111111111111' \
+  --attachment 'ATTACHMENT-CODE'
+```
+
+The dry run verifies the debt UUID, configured payment account, exact attachment
+identity, and projected metadata without changing Holvi. After checking those
+values, repeat the command with `--yes` to authorize the irreversible deletion:
+
+```sh
+holvi attachments delete \
+  --debt '11111111-1111-4111-8111-111111111111' \
+  --attachment 'ATTACHMENT-CODE' \
+  --yes
+```
+
+The extension sends one fixed-path `DELETE` request and then reads the same debt
+until the selected code is absent and every other projected attachment is
+unchanged. Missing, duplicate, malformed, out-of-account, or unverifiable
+attachment state fails closed.
+
 ## Bookkeeping and audit workflow
 
 Enable `bookkeeping.read` or `audit.read` during installation to expose their
@@ -264,8 +296,10 @@ that the command does not use.
 | [`doctor`](#holvi-doctor)                                   | any configured capability                                  | Verify the Chrome connection and an API surface   |
 | [`transactions`](#holvi-transactions)                       | `transactions.read`                                        | List payment-account transactions                 |
 | [`preview`](#holvi-preview)                                 | `transactions.read`                                        | Inspect one accounting debt                       |
-| [`upload`](#holvi-upload)                                   | `transactions.read`, plus `attachments.write` with `--yes` | Validate or upload one receipt                    |
-| [`bookkeeping`](#holvi-bookkeeping)                         | `bookkeeping.read`                                         | Read bookkeeping details and category data        |
+| [`upload`](#holvi-upload)                                   | `transactions.read`, plus `attachments.write` with `--yes`  | Validate or upload one receipt                    |
+| [`attachments`](#holvi-attachments)                         | `transactions.read`, `attachments.delete`                   | Inspect or delete debt attachments                |
+| [`attachments delete`](#holvi-attachments-delete)           | `transactions.read`, `attachments.delete`                   | Preview or delete one selected attachment         |
+| [`bookkeeping`](#holvi-bookkeeping)                         | `bookkeeping.read`                                          | Read bookkeeping details and category data        |
 | [`bookkeeping get`](#holvi-bookkeeping-get)                 | `bookkeeping.read`                                         | Inspect bookkeeping details and active line items |
 | [`bookkeeping categories`](#holvi-bookkeeping-categories)   | `bookkeeping.read`                                         | List bookkeeping categories                       |
 | [`bookkeeping suggestions`](#holvi-bookkeeping-suggestions) | `bookkeeping.read`                                         | List suggested category codes for one debt        |
@@ -429,7 +463,9 @@ holvi preview --debt UUID
 ```
 
 The result includes the debt UUID, object code, counterparty, amount, currency,
-attachment count, and bookkeeping status. `--debt` must be a UUID.
+attachment count, bounded attachment metadata, and bookkeeping status. Each
+attachment includes only `attachmentCode`, `title`, and `format`. `--debt` must
+be a UUID.
 
 ### `holvi upload`
 
@@ -452,6 +488,37 @@ that the resulting attachment count is exactly one.
 
 Accepted files are nonempty PDF, PNG, JPEG, or GIF files within the configured
 size limit. Canonical path checks reject relative paths and symlink escapes.
+
+### `holvi attachments`
+
+Groups the operations that inspect or delete attachments on one selected debt.
+
+```sh
+holvi attachments <COMMAND>
+```
+
+### `holvi attachments delete`
+
+Validates one debt and one attachment code, then prints a dry run or performs the
+irreversible deletion.
+
+```sh
+holvi attachments delete --debt UUID --attachment CODE [--yes]
+```
+
+| Option              | Required | Description                                      |
+| ------------------- | -------- | ------------------------------------------------ |
+| `--debt UUID`       | yes      | Debt that owns the selected attachment           |
+| `--attachment CODE` | yes      | Exact code from the debt's projected attachments |
+| `--yes`             | no       | Perform the deletion after all preflight checks  |
+
+Without `--yes`, the command returns `dryRun`, the bounded debt projection, the
+exact selected attachment, and next-action text. With `--yes`, the extension
+verifies the debt belongs to the configured payment account, rejects missing or
+ambiguous attachment identity, sends
+`DELETE /api/pool/{poolHandle}/attachment/{attachmentCode}/`, and verifies that
+only the selected attachment disappeared. Holvi's successful delete response has
+no projected payload, so success depends on the post-delete debt read.
 
 ### `holvi bookkeeping`
 
@@ -554,6 +621,12 @@ resolve inside one of these directories. The bridge checks that each path is
 absolute, stays inside the directory after canonicalization, points to a regular
 and readable file, has an accepted media type, and fits the size limit.
 
+Attachment deletion has its own destructive capability. `attachments.delete`
+authorizes only the fixed attachment deletion workflow. The workflow requires
+`transactions.read`, an exact debt UUID and attachment code, account-scope and
+identity checks, a dry run by default, explicit `--yes` confirmation, and
+post-delete verification.
+
 The installer creates a random HMAC secret in a `0600` config file. CLI requests
 are signed, expire after 30 seconds, and include replay-protected nonces. The
 native host listens on a user-owned `0600` Unix socket and accepts only the
@@ -590,14 +663,16 @@ One Rust executable has two entry points:
 
 The host handles the authenticated Unix socket, capability checks, nonce cache,
 request timeout, and Native Messaging frames. During the handshake, it sends its
-it sends its protocol and build versions. The extension rejects incompatible
-protocols and includes its build version in `holvi doctor` output. A signed
-`host.restart` request tells the extension to disconnect and reconnect its Native
-Messaging port.
+protocol and build versions. The extension rejects incompatible protocols and
+includes its build version in `holvi doctor` output. A signed `host.restart`
+request tells the extension to disconnect and reconnect its Native Messaging
+port.
 
 Uploads are split into 480 KiB chunks and checked end to end with SHA-256. The
 default size limit is 25 MiB. Uploads also require confirmation and attachment
-checks before and after the write.
+checks before and after the write. Attachment deletion uses fixed debt and
+attachment endpoints, explicit confirmation, and exact attachment-set
+verification after the write.
 
 The compiled extension files live in `assets/extension` so `cargo install` and
 Nix packages can embed them. `src/extension` remains the TypeScript source of
@@ -614,8 +689,9 @@ GET  /api/pool/{poolHandle}/ux/payments-feed/
 GET  /api/pool/{poolHandle}/debt/{debtUuid}/
 GET  /api/pool/{poolHandle}/debt/{debtUuid}/haip/bookkeeping-suggestions/
 GET  /api/pool/{poolHandle}/category/
-GET  /api/pool/{poolHandle}/log-feed/
-POST /api/pool/{poolHandle}/attachment/formpost/
+GET    /api/pool/{poolHandle}/log-feed/
+POST   /api/pool/{poolHandle}/attachment/formpost/
+DELETE /api/pool/{poolHandle}/attachment/{attachmentCode}/
 ```
 
 These are application endpoints rather than a supported public API. Holvi can

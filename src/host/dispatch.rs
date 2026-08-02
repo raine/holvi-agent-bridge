@@ -61,7 +61,9 @@ pub async fn send(
 mod tests {
     use std::path::PathBuf;
 
-    use crate::protocol::{AuditListParams, DebtParams, EmptyParams, UploadParams};
+    use crate::protocol::{
+        AttachmentDeleteParams, AuditListParams, DebtParams, EmptyParams, UploadParams,
+    };
 
     use super::*;
 
@@ -83,6 +85,36 @@ mod tests {
         let config = test_config(vec!["audit.read".into()]);
         let request = test_request(Action::Doctor(EmptyParams {}));
         assert!(validate(&request, &config, true, false).is_ok());
+    }
+
+    #[test]
+    fn attachment_deletion_dispatch_requires_read_and_delete_capabilities() {
+        let request = test_request(Action::AttachmentDelete(AttachmentDeleteParams {
+            debt_uuid: "11111111-1111-4111-8111-111111111111".into(),
+            attachment_code: "ATTACHMENT-1".into(),
+            confirmed: false,
+        }));
+        assert!(
+            validate(
+                &request,
+                &test_config(vec!["attachments.delete".into()]),
+                true,
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            validate(
+                &request,
+                &test_config(vec![
+                    "transactions.read".into(),
+                    "attachments.delete".into()
+                ]),
+                true,
+                false
+            )
+            .is_ok()
+        );
     }
 
     #[test]

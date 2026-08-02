@@ -47,7 +47,11 @@ function debt(attachmentCount: number, accountUuid = paymentAccountUuid) {
     uuid: debtUuid,
     code: "DEBT-1",
     payment_account_uuid: accountUuid,
-    attachments: Array.from({ length: attachmentCount }, () => ({})),
+    attachments: Array.from({ length: attachmentCount }, (_, index) => ({
+      code: `ATTACHMENT-${index + 1}`,
+      title: `receipt-${index + 1}.pdf`,
+      format: "pdf",
+    })),
   };
 }
 

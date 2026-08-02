@@ -121,6 +121,14 @@ pub struct UploadParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentDeleteParams {
+    pub debt_uuid: String,
+    pub attachment_code: String,
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AuditListParams {
     pub limit: u8,
@@ -133,6 +141,7 @@ pub enum Action {
     Transactions(TransactionParams),
     Preview(DebtParams),
     Upload(UploadParams),
+    AttachmentDelete(AttachmentDeleteParams),
     BookkeepingGet(DebtParams),
     BookkeepingCategories(EmptyParams),
     BookkeepingSuggestions(DebtParams),
@@ -147,6 +156,7 @@ impl Action {
             Self::Transactions(_) => "transactions",
             Self::Preview(_) => "preview",
             Self::Upload(_) => "upload",
+            Self::AttachmentDelete(_) => "attachments.delete",
             Self::BookkeepingGet(_) => "bookkeeping.get",
             Self::BookkeepingCategories(_) => "bookkeeping.categories",
             Self::BookkeepingSuggestions(_) => "bookkeeping.suggestions",
@@ -164,6 +174,7 @@ impl Action {
             | Self::BookkeepingGet(params)
             | Self::BookkeepingSuggestions(params) => serde_json::to_value(params),
             Self::Upload(params) => serde_json::to_value(params),
+            Self::AttachmentDelete(params) => serde_json::to_value(params),
             Self::AuditList(params) => serde_json::to_value(params),
         }
         .expect("action parameters serialize")
@@ -202,6 +213,12 @@ impl Action {
                 );
                 Self::Upload(params)
             }
+            "attachments.delete" => {
+                let params: AttachmentDeleteParams = decode(params)?;
+                validate_uuid(&params.debt_uuid, "Debt")?;
+                validate_attachment_code(&params.attachment_code)?;
+                Self::AttachmentDelete(params)
+            }
             "bookkeeping.get" => Self::BookkeepingGet(validated_debt_params(decode(params)?)?),
             "bookkeeping.categories" => Self::BookkeepingCategories(decode(params)?),
             "bookkeeping.suggestions" => {
@@ -224,6 +241,14 @@ impl Action {
 fn validated_debt_params(params: DebtParams) -> Result<DebtParams> {
     validate_uuid(&params.debt_uuid, "Debt")?;
     Ok(params)
+}
+
+pub fn validate_attachment_code(value: &str) -> Result<()> {
+    ensure!(
+        !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control),
+        "Attachment code must be a nonempty bounded string."
+    );
+    Ok(())
 }
 
 fn validate_date(value: &str) -> Result<()> {
@@ -477,6 +502,30 @@ mod tests {
     }
 
     #[test]
+    fn accepts_attachment_deletion_preview_and_confirmation() {
+        for confirmed in [false, true] {
+            let signed = signed_value(
+                "attachments.delete",
+                json!({
+                    "debtUuid": "11111111-1111-4111-8111-111111111111",
+                    "attachmentCode": "ATTACHMENT / 1",
+                    "confirmed": confirmed
+                }),
+            );
+            let clock = signed["issuedAt"].as_u64().unwrap();
+            let request = verify_request(SECRET, signed, &mut HashMap::new(), clock).unwrap();
+            assert_eq!(
+                request.action,
+                Action::AttachmentDelete(AttachmentDeleteParams {
+                    debt_uuid: "11111111-1111-4111-8111-111111111111".into(),
+                    attachment_code: "ATTACHMENT / 1".into(),
+                    confirmed,
+                })
+            );
+        }
+    }
+
+    #[test]
     fn rejects_unknown_actions_after_authentication() {
         let signed = signed_value("fetch", json!({}));
         let clock = signed["issuedAt"].as_u64().unwrap();
@@ -515,6 +564,22 @@ mod tests {
                     "debtUuid": "11111111-1111-4111-8111-111111111111",
                     "filePath": "/tmp/receipt.pdf",
                     "confirmed": false
+                }),
+            ),
+            (
+                "attachments.delete",
+                json!({
+                    "debtUuid": "11111111-1111-4111-8111-111111111111",
+                    "attachmentCode": "",
+                    "confirmed": false
+                }),
+            ),
+            (
+                "attachments.delete",
+                json!({
+                    "debtUuid": "11111111-1111-4111-8111-111111111111",
+                    "attachmentCode": "ATTACHMENT-1",
+                    "confirmed": "yes"
                 }),
             ),
             ("bookkeeping.get", json!({"debtUuid": ""})),

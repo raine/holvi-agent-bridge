@@ -1,110 +1,6 @@
 "use strict";
 (() => {
 
-  // src/extension/policy.ts
-  var minimumFileBytes = 1;
-  var actionCapabilities = {
-    doctor: [],
-    transactions: ["transactions.read"],
-    preview: ["transactions.read"],
-    upload: ["transactions.read", "attachments.write"],
-    "bookkeeping.get": ["bookkeeping.read"],
-    "bookkeeping.categories": ["bookkeeping.read"],
-    "bookkeeping.suggestions": ["bookkeeping.read"],
-    "audit.list": ["audit.read"]
-  };
-  var supportedCapabilities = new Set(Object.values(actionCapabilities).flat());
-  function isBridgeAction(action) {
-    return Object.hasOwn(actionCapabilities, action);
-  }
-  function requiredCapabilities(action) {
-    return isBridgeAction(action) ? actionCapabilities[action] : null;
-  }
-
-  // src/extension/commands.ts
-  function asString(value) {
-    return typeof value === "string" ? value : "";
-  }
-
-  class CommandService {
-    session;
-    api;
-    requestAuth;
-    handlers;
-    constructor(session, api, requestAuth) {
-      this.session = session;
-      this.api = api;
-      this.requestAuth = requestAuth;
-      this.handlers = {
-        doctor: (auth) => this.doctor(auth),
-        transactions: (auth, params) => this.api.listTransactions(auth, params),
-        preview: (auth, params) => this.api.previewDebt(auth, asString(params.debtUuid)),
-        "bookkeeping.get": (auth, params) => this.api.bookkeepingDebt(auth, asString(params.debtUuid)),
-        "bookkeeping.categories": (auth) => this.api.bookkeepingCategories(auth),
-        "bookkeeping.suggestions": (auth, params) => this.api.bookkeepingSuggestions(auth, asString(params.debtUuid)),
-        "audit.list": (auth, params) => this.api.recentAudit(auth, params.limit)
-      };
-    }
-    async handle(message) {
-      const action = message.action || "";
-      if (!isBridgeAction(action)) {
-        throw new Error("The local helper requested an unsupported action.");
-      }
-      const requirements = requiredCapabilities(action);
-      if (!requirements) {
-        throw new Error("The local helper requested an unsupported action.");
-      }
-      this.session.requireCapabilities(...requirements);
-      if (action === "upload") {
-        throw new Error("Receipt uploads require transfer messages.");
-      }
-      const auth = await this.requestAuth();
-      return this.handlers[action](auth, message.params || {});
-    }
-    async doctor(auth) {
-      const config = this.session.optionalConfig;
-      const identity = this.session.identity;
-      const base = {
-        connected: true,
-        groupPathSegment: config?.groupPathSegment,
-        poolHandle: config?.poolHandle,
-        paymentAccountUuid: config?.paymentAccountUuid,
-        capabilities: config?.capabilities,
-        protocolVersion: identity.protocolVersion,
-        hostVersion: identity.hostVersion,
-        extensionVersion: this.session.extensionVersion
-      };
-      if (config?.capabilities.includes("transactions.read")) {
-        this.session.requireCapabilities("transactions.read");
-        const page = await this.api.transactionFeedPage(auth);
-        return {
-          ...base,
-          probeAction: "transactions",
-          firstPageResults: page.results.length
-        };
-      }
-      if (config?.capabilities.includes("bookkeeping.read")) {
-        this.session.requireCapabilities("bookkeeping.read");
-        const categories = await this.api.bookkeepingCategories(auth);
-        return {
-          ...base,
-          probeAction: "bookkeeping.categories",
-          categoryCount: categories.length
-        };
-      }
-      if (config?.capabilities.includes("audit.read")) {
-        this.session.requireCapabilities("audit.read");
-        const audit = await this.api.recentAudit(auth, 1);
-        return {
-          ...base,
-          probeAction: "audit.list",
-          recentActivityCount: audit.returnedCount
-        };
-      }
-      return { ...base, probeAction: null };
-    }
-  }
-
   // src/extension/projections.ts
   var uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   var decimalPattern = /^-?\d+(?:\.\d+)?$/;
@@ -268,6 +164,29 @@
   function projectTransactionListing(value) {
     return projection(value);
   }
+  function attachmentCode(value) {
+    const code = boundedString(value, "Attachment code");
+    if (code.length > 256 || Array.from({ length: code.length }, (_, index) => code.charCodeAt(index)).some((value2) => value2 < 32 || value2 === 127)) {
+      throw new Error("Attachment code must be a nonempty bounded string.");
+    }
+    return code;
+  }
+  function debtAttachments(value, label) {
+    const codes = new Set;
+    return boundedArray(value, `${label} attachments`, maxDebtAttachments, true).map((entry) => {
+      const source = record(entry, `${label} attachment`);
+      const code = attachmentCode(source.code);
+      if (codes.has(code)) {
+        throw new Error(`${label} contains an ambiguous attachment code.`);
+      }
+      codes.add(code);
+      return {
+        attachmentCode: code,
+        title: boundedString(source.title, `${label} attachment title`),
+        format: optionalString(source.format, `${label} attachment format`)
+      };
+    });
+  }
   function debtRecord(value, debtUuid, paymentAccountUuid, label) {
     const debt = record(value, label);
     const requestedUuid = uuid(debtUuid, "Debt UUID");
@@ -280,7 +199,7 @@
     if (responsePaymentAccountUuid.toLowerCase() !== configuredPaymentAccountUuid.toLowerCase()) {
       throw new Error(`Holvi ${label.toLowerCase()} payment account does not match the configured payment account.`);
     }
-    const attachments = boundedArray(debt.attachments, `${label} attachments`, maxDebtAttachments, true);
+    const attachments = debtAttachments(debt.attachments, label);
     const merchant = optionalRecord(debt.merchant, `${label} merchant`);
     return projection({
       debtUuid: requestedUuid,
@@ -289,6 +208,7 @@
       amount: decimal(debt.amount ?? debt.value ?? debt.total, `${label} amount`),
       currency: optionalString(debt.currency, `${label} currency`) ?? "EUR",
       attachmentCount: attachments.length,
+      attachments,
       bookkeepingStatus: optionalString(debt.bookkeeping_status, `${label} bookkeeping status`) ?? stringOrEmpty(debt.bookkeeping_state, `${label} bookkeeping state`)
     });
   }
@@ -297,6 +217,18 @@
   }
   function projectUploadDebtRead(value, debtUuid, paymentAccountUuid) {
     return debtRecord(value, debtUuid, paymentAccountUuid, "Upload debt");
+  }
+  function projectAttachmentDeletionDebt(value, debtUuid, paymentAccountUuid) {
+    const debt = record(value, "Attachment deletion debt");
+    const expectedAccount = uuid(paymentAccountUuid, "Configured payment account UUID");
+    const actualAccount = uuid(debt.payment_account_uuid, "Attachment deletion payment account UUID");
+    if (actualAccount.toLowerCase() !== expectedAccount.toLowerCase()) {
+      throw new Error("Holvi attachment deletion debt is outside the configured payment account.");
+    }
+    return projection({
+      ...debtRecord(debt, debtUuid, paymentAccountUuid, "Attachment deletion debt"),
+      paymentAccountUuid: actualAccount
+    });
   }
   function bookkeepingItem(value) {
     const item = record(value, "Bookkeeping item");
@@ -446,6 +378,27 @@
     });
   }
 
+  // src/extension/policy.ts
+  var minimumFileBytes = 1;
+  var actionCapabilities = {
+    doctor: [],
+    transactions: ["transactions.read"],
+    preview: ["transactions.read"],
+    upload: ["transactions.read", "attachments.write"],
+    "attachments.delete": ["transactions.read", "attachments.delete"],
+    "bookkeeping.get": ["bookkeeping.read"],
+    "bookkeeping.categories": ["bookkeeping.read"],
+    "bookkeeping.suggestions": ["bookkeeping.read"],
+    "audit.list": ["audit.read"]
+  };
+  var supportedCapabilities = new Set(Object.values(actionCapabilities).flat());
+  function isBridgeAction(action) {
+    return Object.hasOwn(actionCapabilities, action);
+  }
+  function requiredCapabilities(action) {
+    return isBridgeAction(action) ? actionCapabilities[action] : null;
+  }
+
   // src/extension/session.ts
   var uuidPattern2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   var poolHandlePattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -530,6 +483,171 @@
     }
     apiRoot() {
       return `/api/pool/${encodeURIComponent(this.config.poolHandle)}/`;
+    }
+  }
+
+  // src/extension/attachment-deletion-workflow.ts
+  function validateAttachmentCode(value) {
+    if (typeof value !== "string" || value.length < 1 || value.length > 256 || Array.from({ length: value.length }, (_, index) => value.charCodeAt(index)).some((code) => code < 32 || code === 127)) {
+      throw new Error("Attachment code must be a nonempty bounded string.");
+    }
+    return value;
+  }
+  function attachments(debt) {
+    if (!Array.isArray(debt.attachments)) {
+      throw new Error("Holvi attachment deletion projection is invalid.");
+    }
+    return debt.attachments;
+  }
+  function sameRemainingAttachments(before, after, deletedCode) {
+    const expected = before.filter((attachment) => attachment.attachmentCode !== deletedCode);
+    if (after.length !== expected.length) {
+      return false;
+    }
+    const actualByCode = new Map(after.map((attachment) => [attachment.attachmentCode, attachment]));
+    return expected.every((attachment) => {
+      const actual = actualByCode.get(attachment.attachmentCode);
+      return actual && JSON.stringify(actual) === JSON.stringify(attachment);
+    });
+  }
+
+  class AttachmentDeletionWorkflow {
+    session;
+    api;
+    sleep;
+    constructor(session, api, sleep = (delay) => new Promise((resolve) => self.setTimeout(resolve, delay))) {
+      this.session = session;
+      this.api = api;
+      this.sleep = sleep;
+    }
+    async deleteAttachment(auth, params) {
+      this.session.requireCapabilities("transactions.read", "attachments.delete");
+      const debtUuid = validateUuid(typeof params.debtUuid === "string" ? params.debtUuid : "", "debt");
+      const attachmentCode2 = validateAttachmentCode(params.attachmentCode);
+      if (typeof params.confirmed !== "boolean") {
+        throw new Error("Attachment deletion confirmation is invalid.");
+      }
+      const before = projectAttachmentDeletionDebt(await this.api.request(auth, this.api.debtPath(debtUuid)), debtUuid, this.session.config.paymentAccountUuid);
+      const beforeAttachments = attachments(before);
+      const matches = beforeAttachments.filter((attachment) => attachment.attachmentCode === attachmentCode2);
+      if (matches.length !== 1) {
+        throw new Error(matches.length === 0 ? "Attachment deletion target does not exist on the selected debt." : "Attachment deletion target is ambiguous on the selected debt.");
+      }
+      const target = matches[0];
+      if (!params.confirmed) {
+        return {
+          dryRun: true,
+          debt: before,
+          attachment: target,
+          next: "Repeat the attachment deletion command with --yes after checking these values."
+        };
+      }
+      await this.api.request(auth, `${this.session.apiRoot()}attachment/${encodeURIComponent(attachmentCode2)}/`, { method: "DELETE" });
+      let after = null;
+      for (const delay of [0, 250, 500, 1000, 2000]) {
+        if (delay) {
+          await this.sleep(delay);
+        }
+        after = projectAttachmentDeletionDebt(await this.api.request(auth, this.api.debtPath(debtUuid)), debtUuid, this.session.config.paymentAccountUuid);
+        if (sameRemainingAttachments(beforeAttachments, attachments(after), attachmentCode2)) {
+          return {
+            dryRun: false,
+            debtUuid,
+            attachment: target,
+            attachmentCountBefore: beforeAttachments.length,
+            attachmentCountAfter: attachments(after).length,
+            verified: true
+          };
+        }
+      }
+      throw new Error("Holvi accepted the deletion but the resulting attachment state could not be verified. Inspect the debt before retrying.");
+    }
+  }
+
+  // src/extension/commands.ts
+  function asString(value) {
+    return typeof value === "string" ? value : "";
+  }
+
+  class CommandService {
+    session;
+    api;
+    requestAuth;
+    handlers;
+    attachmentDeletion;
+    constructor(session, api, requestAuth) {
+      this.session = session;
+      this.api = api;
+      this.requestAuth = requestAuth;
+      this.attachmentDeletion = new AttachmentDeletionWorkflow(session, api);
+      this.handlers = {
+        doctor: (auth) => this.doctor(auth),
+        transactions: (auth, params) => this.api.listTransactions(auth, params),
+        preview: (auth, params) => this.api.previewDebt(auth, asString(params.debtUuid)),
+        "attachments.delete": (auth, params) => this.attachmentDeletion.deleteAttachment(auth, params),
+        "bookkeeping.get": (auth, params) => this.api.bookkeepingDebt(auth, asString(params.debtUuid)),
+        "bookkeeping.categories": (auth) => this.api.bookkeepingCategories(auth),
+        "bookkeeping.suggestions": (auth, params) => this.api.bookkeepingSuggestions(auth, asString(params.debtUuid)),
+        "audit.list": (auth, params) => this.api.recentAudit(auth, params.limit)
+      };
+    }
+    async handle(message) {
+      const action = message.action || "";
+      if (!isBridgeAction(action)) {
+        throw new Error("The local helper requested an unsupported action.");
+      }
+      const requirements = requiredCapabilities(action);
+      if (!requirements) {
+        throw new Error("The local helper requested an unsupported action.");
+      }
+      this.session.requireCapabilities(...requirements);
+      if (action === "upload") {
+        throw new Error("Receipt uploads require transfer messages.");
+      }
+      const auth = await this.requestAuth();
+      return this.handlers[action](auth, message.params || {});
+    }
+    async doctor(auth) {
+      const config = this.session.optionalConfig;
+      const identity = this.session.identity;
+      const base = {
+        connected: true,
+        groupPathSegment: config?.groupPathSegment,
+        poolHandle: config?.poolHandle,
+        paymentAccountUuid: config?.paymentAccountUuid,
+        capabilities: config?.capabilities,
+        protocolVersion: identity.protocolVersion,
+        hostVersion: identity.hostVersion,
+        extensionVersion: this.session.extensionVersion
+      };
+      if (config?.capabilities.includes("transactions.read")) {
+        this.session.requireCapabilities("transactions.read");
+        const page = await this.api.transactionFeedPage(auth);
+        return {
+          ...base,
+          probeAction: "transactions",
+          firstPageResults: page.results.length
+        };
+      }
+      if (config?.capabilities.includes("bookkeeping.read")) {
+        this.session.requireCapabilities("bookkeeping.read");
+        const categories = await this.api.bookkeepingCategories(auth);
+        return {
+          ...base,
+          probeAction: "bookkeeping.categories",
+          categoryCount: categories.length
+        };
+      }
+      if (config?.capabilities.includes("audit.read")) {
+        this.session.requireCapabilities("audit.read");
+        const audit = await this.api.recentAudit(auth, 1);
+        return {
+          ...base,
+          probeAction: "audit.list",
+          recentActivityCount: audit.returnedCount
+        };
+      }
+      return { ...base, probeAction: null };
     }
   }
 

@@ -22,18 +22,18 @@ use crate::config::{
 use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
 use crate::install::{HostRestartStatus, InstallOptions, InstallResult, install_bridge};
 use crate::protocol::{
-    Action, AuditListParams, DebtParams, EmptyParams, HOST_BUILD_VERSION,
+    Action, AttachmentDeleteParams, AuditListParams, DebtParams, EmptyParams, HOST_BUILD_VERSION,
     MAX_SOCKET_RESPONSE_BYTES, NATIVE_PROTOCOL_VERSION, TransactionParams, UploadParams,
-    sign_request,
+    sign_request, validate_attachment_code,
 };
 use crate::receipt_sandbox::resolve_receipt_file;
 use crate::skill::{self, CodingAgentArg};
 
 const HELP_AFTER: &str =
-    "Commands that contact Holvi require their configured capability. Upload is a dry
-check unless --yes is present. The configured signed-in Holvi group tab must
-remain open in Chrome. Attachment paths are restricted by the private local
-config.";
+    "Commands that contact Holvi require their configured capability. Upload and
+attachment deletion are dry checks unless --yes is present. The configured signed-in
+Holvi group tab must remain open in Chrome. Attachment paths are restricted by the
+private local config.";
 
 #[derive(Parser)]
 #[command(
@@ -68,6 +68,11 @@ enum Command {
     Preview(PreviewArgs),
     /// Validate or upload one receipt
     Upload(UploadArgs),
+    /// Inspect or delete debt attachments
+    Attachments {
+        #[command(subcommand)]
+        command: AttachmentsCommand,
+    },
     /// Read bookkeeping details and category data
     Bookkeeping {
         #[command(subcommand)]
@@ -86,6 +91,12 @@ enum ConfigCommand {
     Edit,
     /// Print the configuration file path
     Path,
+}
+
+#[derive(Subcommand)]
+enum AttachmentsCommand {
+    /// Preview or delete one attachment from one debt
+    Delete(AttachmentDeleteArgs),
 }
 
 #[derive(Subcommand)]
@@ -176,6 +187,19 @@ struct UploadArgs {
     debt: String,
     #[arg(long)]
     file: PathBuf,
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args)]
+struct AttachmentDeleteArgs {
+    /// Debt that owns the attachment
+    #[arg(long)]
+    debt: String,
+    /// Exact attachment code from the debt preview
+    #[arg(long)]
+    attachment: String,
+    /// Confirm the irreversible deletion
     #[arg(long)]
     yes: bool,
 }
@@ -348,6 +372,23 @@ pub async fn run() -> Result<()> {
                 }))?;
             }
         }
+        Command::Attachments { command } => match command {
+            AttachmentsCommand::Delete(args) => {
+                validate_uuid(&args.debt, "Debt")?;
+                validate_attachment_code(&args.attachment)?;
+                print_json(
+                    &request_host(
+                        &config.hmac_secret,
+                        Action::AttachmentDelete(AttachmentDeleteParams {
+                            debt_uuid: args.debt,
+                            attachment_code: args.attachment,
+                            confirmed: args.yes,
+                        }),
+                    )
+                    .await?,
+                )?;
+            }
+        },
         Command::Bookkeeping { command } => match command {
             BookkeepingCommand::Get(args) => {
                 validate_uuid(&args.debt, "Debt")?;
@@ -1117,6 +1158,24 @@ mod tests {
             })
         ));
 
+        let deletion = Cli::try_parse_from([
+            "holvi",
+            "attachments",
+            "delete",
+            "--debt",
+            "11111111-1111-4111-8111-111111111111",
+            "--attachment",
+            "ATTACHMENT-1",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            deletion.command,
+            Some(Command::Attachments {
+                command: AttachmentsCommand::Delete(AttachmentDeleteArgs { yes: true, .. })
+            })
+        ));
+
         let audit = Cli::try_parse_from(["holvi", "audit", "list", "--limit", "25"]).unwrap();
         assert!(matches!(
             audit.command,
@@ -1162,8 +1221,16 @@ mod tests {
         );
 
         assert!(output.starts_with("holvi capabilities\n\nCapabilities\n------------\n"));
-        assert!(output.contains("  ok transactions.read  enabled\n"));
-        assert!(output.contains("  .. bookkeeping.read   disabled\n"));
+        assert!(
+            output
+                .lines()
+                .any(|line| line.starts_with("  ok transactions.read") && line.ends_with("enabled"))
+        );
+        assert!(
+            output
+                .lines()
+                .any(|line| line.starts_with("  .. bookkeeping.read") && line.ends_with("disabled"))
+        );
         assert!(output.contains("\nOperations\n----------\n"));
         assert!(output.contains("  ok doctor                   enabled\n"));
         assert!(

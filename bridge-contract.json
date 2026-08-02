@@ -19,6 +19,7 @@
     "transactions": ["transactions.read"],
     "preview": ["transactions.read"],
     "upload": ["transactions.read", "attachments.write"],
+    "attachments.delete": ["transactions.read", "attachments.delete"],
     "bookkeeping.get": ["bookkeeping.read"],
     "bookkeeping.categories": ["bookkeeping.read"],
     "bookkeeping.suggestions": ["bookkeeping.read"],

@@ -1,4 +1,5 @@
 import type { Auth, NativeMessage } from "./background-types.js";
+import { AttachmentDeletionWorkflow } from "./attachment-deletion-workflow.js";
 import { HolviApi } from "./holvi-api.js";
 import {
   isBridgeAction,
@@ -18,17 +19,21 @@ type CommandHandler = (
 
 export class CommandService {
   private readonly handlers: Record<CommandAction, CommandHandler>;
+  private readonly attachmentDeletion: AttachmentDeletionWorkflow;
 
   constructor(
     private readonly session: BridgeSession,
     private readonly api: HolviApi,
     private readonly requestAuth: () => Promise<Auth>,
   ) {
+    this.attachmentDeletion = new AttachmentDeletionWorkflow(session, api);
     this.handlers = {
       doctor: (auth) => this.doctor(auth),
       transactions: (auth, params) => this.api.listTransactions(auth, params),
       preview: (auth, params) =>
         this.api.previewDebt(auth, asString(params.debtUuid)),
+      "attachments.delete": (auth, params) =>
+        this.attachmentDeletion.deleteAttachment(auth, params),
       "bookkeeping.get": (auth, params) =>
         this.api.bookkeepingDebt(auth, asString(params.debtUuid)),
       "bookkeeping.categories": (auth) => this.api.bookkeepingCategories(auth),

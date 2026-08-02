@@ -182,6 +182,9 @@ mod tests {
         assert!(SKILL_BODY.contains("dry run"));
         assert!(SKILL_BODY.contains("explicit authorization"));
         assert!(SKILL_BODY.contains("debtUuid"));
+        assert!(SKILL_BODY.contains("holvi attachments delete"));
+        assert!(SKILL_BODY.contains("irreversible"));
+        assert!(SKILL_BODY.contains("post-delete debt read"));
         assert!(SKILL_BODY.contains("named operations"));
     }
 }

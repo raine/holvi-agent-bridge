@@ -240,6 +240,41 @@ export function projectTransactionListing<T>(value: T): T {
   return projection(value);
 }
 
+function attachmentCode(value: unknown): string {
+  const code = boundedString(value, "Attachment code");
+  if (
+    code.length > 256 ||
+    Array.from({ length: code.length }, (_, index) =>
+      code.charCodeAt(index),
+    ).some((value) => value < 32 || value === 127)
+  ) {
+    throw new Error("Attachment code must be a nonempty bounded string.");
+  }
+  return code;
+}
+
+function debtAttachments(value: unknown, label: string): JsonRecord[] {
+  const codes = new Set<string>();
+  return boundedArray(
+    value,
+    `${label} attachments`,
+    maxDebtAttachments,
+    true,
+  ).map((entry) => {
+    const source = record(entry, `${label} attachment`);
+    const code = attachmentCode(source.code);
+    if (codes.has(code)) {
+      throw new Error(`${label} contains an ambiguous attachment code.`);
+    }
+    codes.add(code);
+    return {
+      attachmentCode: code,
+      title: boundedString(source.title, `${label} attachment title`),
+      format: optionalString(source.format, `${label} attachment format`),
+    };
+  });
+}
+
 function debtRecord(
   value: unknown,
   debtUuid: string,
@@ -270,12 +305,7 @@ function debtRecord(
       `Holvi ${label.toLowerCase()} payment account does not match the configured payment account.`,
     );
   }
-  const attachments = boundedArray(
-    debt.attachments,
-    `${label} attachments`,
-    maxDebtAttachments,
-    true,
-  );
+  const attachments = debtAttachments(debt.attachments, label);
   const merchant = optionalRecord(debt.merchant, `${label} merchant`);
   return projection({
     debtUuid: requestedUuid,
@@ -286,6 +316,7 @@ function debtRecord(
     amount: decimal(debt.amount ?? debt.value ?? debt.total, `${label} amount`),
     currency: optionalString(debt.currency, `${label} currency`) ?? "EUR",
     attachmentCount: attachments.length,
+    attachments,
     bookkeepingStatus:
       optionalString(debt.bookkeeping_status, `${label} bookkeeping status`) ??
       stringOrEmpty(debt.bookkeeping_state, `${label} bookkeeping state`),
@@ -306,6 +337,36 @@ export function projectUploadDebtRead(
   paymentAccountUuid: string,
 ): JsonRecord {
   return debtRecord(value, debtUuid, paymentAccountUuid, "Upload debt");
+}
+
+export function projectAttachmentDeletionDebt(
+  value: unknown,
+  debtUuid: string,
+  paymentAccountUuid: string,
+): JsonRecord {
+  const debt = record(value, "Attachment deletion debt");
+  const expectedAccount = uuid(
+    paymentAccountUuid,
+    "Configured payment account UUID",
+  );
+  const actualAccount = uuid(
+    debt.payment_account_uuid,
+    "Attachment deletion payment account UUID",
+  );
+  if (actualAccount.toLowerCase() !== expectedAccount.toLowerCase()) {
+    throw new Error(
+      "Holvi attachment deletion debt is outside the configured payment account.",
+    );
+  }
+  return projection({
+    ...debtRecord(
+      debt,
+      debtUuid,
+      paymentAccountUuid,
+      "Attachment deletion debt",
+    ),
+    paymentAccountUuid: actualAccount,
+  });
 }
 
 function bookkeepingItem(value: unknown): JsonRecord {

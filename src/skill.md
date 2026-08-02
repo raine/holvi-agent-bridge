@@ -22,6 +22,9 @@ for Holvi work. Authentication stays inside Chrome.
   configured payment account.
 - `attachments.write` combines with `transactions.read` to permit a confirmed
   receipt upload. A dry run needs only `transactions.read`.
+- `attachments.delete` combines with `transactions.read` to permit one selected
+  attachment deletion. It is separate from upload permission because deletion is
+  irreversible, and deletion previews also require this capability.
 - `bookkeeping.read` permits bookkeeping detail, category, and suggestion reads
   for the configured Holvi pool.
 - `audit.read` permits one bounded recent-activity read for the configured pool.
@@ -32,8 +35,8 @@ for Holvi work. Authentication stays inside Chrome.
 ## Transaction identifiers
 
 - Transaction JSON keeps `paymentUuid` and `debtUuid` separate.
-- Use `debtUuid` with `preview`, `upload`, `bookkeeping get`, and
-  `bookkeeping suggestions`. Never substitute `paymentUuid`.
+- Use `debtUuid` with `preview`, `upload`, `attachments delete`, `bookkeeping
+  get`, and `bookkeeping suggestions`. Never substitute `paymentUuid`.
 - A pending payment can have a null `debtUuid`. Wait until Holvi creates the
   debt record instead of guessing or deriving an identifier.
 - Transaction scope is one configured payment account. Bookkeeping and audit
@@ -106,6 +109,42 @@ A receipt upload is a write. Always use this sequence:
 - Report the verified result. Do not claim success from the initial upload
   response alone.
 
+## Attachment deletion workflow
+
+Attachment deletion is irreversible. Always use this sequence:
+
+1. Run `holvi preview --debt UUID` and inspect the bounded `attachments` list.
+   Select the intended attachment by its exact `attachmentCode`, `title`, and
+   `format`. Stop if identity is ambiguous.
+2. Run the deletion command without `--yes`:
+
+   ```sh
+   holvi attachments delete \
+     --debt 11111111-1111-4111-8111-111111111111 \
+     --attachment ATTACHMENT-CODE
+   ```
+
+3. Verify the dry run's debt UUID, configured payment account, debt metadata,
+   complete projected attachment list, and exact selected attachment. Resolve any
+   mismatch instead of proceeding.
+4. Add `--yes` only with explicit authorization to delete that attachment from
+   that debt:
+
+   ```sh
+   holvi attachments delete \
+     --debt 11111111-1111-4111-8111-111111111111 \
+     --attachment ATTACHMENT-CODE \
+     --yes
+   ```
+
+- Treat `--yes` as authorization for one irreversible deletion. Never reuse it
+  for another debt or attachment.
+- The extension verifies debt UUID and payment-account scope before deletion. It
+  rejects missing, duplicate, malformed, or mismatched attachment identity.
+- Success means a post-delete debt read found the selected code absent and every
+  other projected attachment unchanged. Surface API or verification errors and
+  inspect the debt before any retry.
+
 ## Installation workflow
 
 Use installation only when the user asks to configure or reconfigure the bridge:
@@ -119,7 +158,8 @@ holvi install \
 ```
 
 - Repeat `--capability` and `--receipt-root` for each approved value.
-- `attachments.write` requires at least one receipt root.
+- `attachments.write` requires at least one receipt root. `attachments.delete`
+  does not grant local file access.
 - Installation updates the private account scope and capability allowlist. Show
   the proposed scope to the user before running it.
 
@@ -129,7 +169,8 @@ holvi install \
   the user to expose one or place one in files, shell arguments, logs, or
   messages.
 - The bridge exposes named operations, not arbitrary authenticated HTTP fetches.
-  Do not attempt to turn it into a generic API proxy.
+  Attachment deletion uses one fixed debt read and one fixed attachment delete
+  path. Do not attempt to turn it into a generic API proxy.
 - Keep request sizes and result limits bounded. Use command filters rather than
   scraping unrelated Holvi surfaces.
 - A missing-socket error means the configured signed-in group tab must be opened
