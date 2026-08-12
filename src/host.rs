@@ -1,4 +1,5 @@
 mod dispatch;
+mod download;
 mod native_messaging;
 mod receipt;
 mod runtime;

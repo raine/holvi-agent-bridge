@@ -3,6 +3,19 @@ title: Changelog
 description: Release notes for Holvi Agent Bridge.
 ---
 
+## Unreleased
+
+- Discover payment accounts with a dedicated read capability.
+- Export account statements, journals, ledgers, CAMT.052 files, and invoicing
+  reports into approved local directories.
+- Create, inspect, list, and download All-in-One PDF and ZIP report jobs.
+- Stream report and attachment downloads through protocol version 2 with bounded
+  chunks, atomic private files, byte counts, and SHA-256 integrity metadata.
+- Traverse bounded bookkeeping and historical activity pages with explicit
+  truncation metadata and source-supported filters.
+- Separate report reads, report generation, attachment reads, and account reads
+  into dedicated capabilities.
+
 ## v0.1.1 (2026-08-02)
 
 - Read and create internal transaction comments with dry-run confirmation and no

@@ -166,9 +166,13 @@ The private config lists the capabilities available to the agent.
 | `attachments.write`  | Attach a local file after preflight checks and verify the result            |
 | `attachments.delete` | Delete one selected debt attachment after preview and verification          |
 | `comments.write`     | Create an internal comment without sending a push notification              |
-| `bookkeeping.read`   | Inspect accounting details, categories, and category suggestions            |
+| `bookkeeping.read`   | Inspect and traverse accounting documents, categories, and suggestions      |
 | `bookkeeping.write`  | Replace one bookkeeping line-item description and verify the result         |
-| `audit.read`         | Inspect up to 25 recent pool activity entries                                |
+| `audit.read`         | Traverse historical pool activity and list activity type classes            |
+| `attachments.read`  | Download a debt-owned attachment into an approved export directory          |
+| `accounts.read`     | Discover payment accounts belonging to the configured pool                  |
+| `reports.read`      | List report types and jobs, then stream report files locally                |
+| `reports.generate`  | Create an asynchronous report job after explicit confirmation               |
 
 Attachment writes, attachment deletions, and comment writes also require
 `transactions.read` because the bridge validates the authoritative transaction
@@ -338,6 +342,47 @@ holvi audit list --limit 25
 The audit command returns one page in newest-first order. It leaves out
 polymorphic details, field changes, continuation URLs, and other response fields
 that the command does not use.
+
+## Export workflow
+
+Configure at least one existing, user-owned export directory with
+`holvi install --export-root PATH`. Receipt roots authorize files flowing into
+Holvi. Export roots independently authorize files flowing to local storage.
+Downloads refuse symlinks, paths outside approved roots, destination collisions,
+and files above `--max-download-bytes`.
+
+```sh
+holvi accounts list --json
+holvi reports types --json
+holvi reports export --type journal --from 2026-01-01 --to 2026-03-31 \
+  --format xls --output "$HOME/holvi-exports"
+
+holvi reports jobs create --type all-in-one-zip \
+  --from 2026-01-01 --to 2026-03-31
+holvi reports jobs create --type all-in-one-zip \
+  --from 2026-01-01 --to 2026-03-31 --yes
+holvi reports jobs list --type all-in-one-zip --status ready --json
+holvi reports jobs download --report REPORT_UUID \
+  --output "$HOME/holvi-exports"
+
+holvi attachments download --debt DEBT_UUID --attachment ATTACHMENT_CODE \
+  --output "$HOME/holvi-exports"
+```
+
+The host chooses a sanitized filename, creates the final file with mode `0600`,
+and prints its exact byte count and SHA-256 digest. Signed storage links and
+browser credentials stay inside the extension.
+
+Bookkeeping and activity exports traverse bounded pages and state whether the
+result is truncated:
+
+```sh
+holvi bookkeeping list --from 2022-01-01 --to 2026-12-31 \
+  --max-pages 200 --json
+holvi audit types --json
+holvi audit list --from 2022-01-01 --to 2026-12-31 \
+  --type-class bookkeeping_status --query reopened --max-pages 200 --json
+```
 
 ## Command reference
 

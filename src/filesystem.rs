@@ -1,4 +1,7 @@
 use std::fs::Metadata;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, ensure};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 
 pub fn current_user_uid() -> u32 {
@@ -20,6 +23,39 @@ pub fn is_owned_by_current_user(metadata: &Metadata) -> bool {
 
 pub fn has_mode_0600(metadata: &Metadata) -> bool {
     metadata.permissions().mode() & 0o777 == 0o600
+}
+
+pub fn resolve_export_root(path: &Path) -> Result<PathBuf> {
+    ensure!(path.is_absolute(), "Export root must be absolute.");
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("Unable to inspect export root: {}", path.display()))?;
+    ensure!(
+        metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
+        "Export root must be an existing directory, not a symlink."
+    );
+    ensure!(
+        is_owned_by_current_user(&metadata),
+        "Export root must be owned by the current user."
+    );
+    let canonical = path.canonicalize()?;
+    ensure!(
+        canonical.parent().is_some() && canonical != Path::new("/"),
+        "Export root is too broad."
+    );
+    Ok(canonical)
+}
+
+pub fn resolve_export_directory(path: &Path, roots: &[PathBuf]) -> Result<PathBuf> {
+    let directory = resolve_export_root(path)?;
+    let roots = roots
+        .iter()
+        .map(|root| resolve_export_root(root))
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        roots.iter().any(|root| directory.starts_with(root)),
+        "Output directory is outside approved export roots."
+    );
+    Ok(directory)
 }
 
 #[cfg(test)]
@@ -71,6 +107,24 @@ mod tests {
 
         assert!(!is_regular_file(&metadata));
         assert!(!is_socket(&metadata));
+    }
+
+    #[test]
+    fn authorizes_only_real_directories_below_export_roots() {
+        let root = tempdir().unwrap();
+        let child = root.path().join("exports");
+        fs::create_dir(&child).unwrap();
+        let root = root.path().canonicalize().unwrap();
+        assert_eq!(
+            resolve_export_directory(&child, std::slice::from_ref(&root)).unwrap(),
+            child.canonicalize().unwrap()
+        );
+
+        let outside = tempdir().unwrap();
+        assert!(resolve_export_directory(outside.path(), std::slice::from_ref(&root)).is_err());
+        let link = root.join("link");
+        symlink(&child, &link).unwrap();
+        assert!(resolve_export_directory(&link, std::slice::from_ref(&root)).is_err());
     }
 
     #[test]

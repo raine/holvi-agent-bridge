@@ -23,6 +23,13 @@ tabs = new TabRegistry(staticConfig, session, {
 });
 const commands = new CommandService(session, api, () => tabs.requestAuth());
 const uploads = new UploadWorkflow(session, api);
-nativeBridge = new NativeBridge(staticConfig, session, tabs, commands, uploads);
+nativeBridge = new NativeBridge(
+  staticConfig,
+  session,
+  tabs,
+  commands,
+  uploads,
+  api,
+);
 
 chrome.runtime.onConnect.addListener((port) => tabs.register(port));

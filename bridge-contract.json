@@ -1,7 +1,7 @@
 {
   "versions": {
     "signedRequest": 1,
-    "nativeProtocol": 1,
+    "nativeProtocol": 2,
     "host": "0.1.1",
     "extension": "0.1.1",
     "extensionManifest": 3
@@ -12,7 +12,9 @@
   },
   "origins": {
     "account": "https://account.app.holvi.com",
-    "api": "https://holvi.com"
+    "api": "https://holvi.com",
+    "app": "https://app.holvi.com",
+    "storage": "https://storage.holvi.com"
   },
   "actions": {
     "doctor": [],
@@ -23,10 +25,20 @@
     "comments.create": ["transactions.read", "comments.write"],
     "attachments.upload": ["transactions.read", "attachments.write"],
     "attachments.delete": ["transactions.read", "attachments.delete"],
+    "attachments.download": ["bookkeeping.read", "attachments.read"],
+    "accounts.list": ["accounts.read"],
+    "reports.types": ["reports.read"],
+    "reports.export": ["reports.read"],
+    "reports.jobs.list": ["reports.read"],
+    "reports.jobs.get": ["reports.read"],
+    "reports.jobs.create": ["reports.generate"],
+    "reports.jobs.download": ["reports.read"],
+    "bookkeeping.list": ["bookkeeping.read"],
     "bookkeeping.get": ["bookkeeping.read"],
     "bookkeeping.categories": ["bookkeeping.read"],
     "bookkeeping.suggestions": ["bookkeeping.read"],
     "bookkeeping.set-description": ["bookkeeping.write"],
+    "audit.types": ["audit.read"],
     "audit.list": ["audit.read"]
   },
   "apiResponseBytes": {
@@ -38,7 +50,38 @@
   "fileBytes": {
     "min": 1,
     "max": 26214400,
-    "uploadChunk": 491520
+    "uploadChunk": 491520,
+    "downloadChunk": 491520,
+    "defaultDownloadMax": 1073741824
+  },
+  "downloadMimeTypes": [
+    "application/pdf",
+    "application/zip",
+    "application/xml",
+    "text/xml",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/octet-stream",
+    "image/png",
+    "image/jpeg",
+    "image/gif"
+  ],
+  "reportTypes": {
+    "account-statement": {"backend": "account-statement", "mode": "direct", "formats": ["pdf", "xls"], "accountRequired": true, "maxMonths": 12},
+    "journal": {"backend": "journal-v2", "mode": "direct", "formats": ["xls"], "accountRequired": false},
+    "ledger": {"backend": "ledger-v2", "mode": "direct", "formats": ["xls"], "accountRequired": false},
+    "camt052": {"backend": "camt052", "mode": "direct", "formats": ["xml"], "accountRequired": true},
+    "invoicing": {"backend": "invoicing", "mode": "direct", "formats": ["xls"], "accountRequired": false},
+    "all-in-one-pdf": {"backend": "single_pdf", "mode": "async", "formats": ["pdf"], "accountRequired": true, "maxMonths": 12},
+    "all-in-one-zip": {"backend": "zip_export", "mode": "async", "formats": ["zip"], "accountRequired": false}
+  },
+  "pagination": {
+    "bookkeepingPageSize": 100,
+    "bookkeepingPages": 200,
+    "bookkeepingResults": 20000,
+    "auditPageSize": 25,
+    "auditPages": 200,
+    "auditResults": 5000
   },
   "uploadMimeTypes": [
     "application/pdf",
@@ -48,7 +91,7 @@
   ],
   "auditLimit": {
     "min": 1,
-    "max": 25,
+    "max": 5000,
     "pageSize": 25
   },
   "commentLimits": {
@@ -61,6 +104,7 @@
   "timeoutsMs": {
     "signedRequestMaxAge": 30000,
     "nativeRequest": 120000,
+    "downloadTransfer": 600000,
     "uploadTransfer": 30000,
     "nativeReconnect": 1000
   },
@@ -73,6 +117,14 @@
       "upload_chunk",
       "upload_end"
     ],
-    "extensionToHost": ["tab_ready", "tab_unavailable", "host_rejected", "result"]
+    "extensionToHost": [
+      "tab_ready",
+      "tab_unavailable",
+      "host_rejected",
+      "download_start",
+      "download_chunk",
+      "download_end",
+      "result"
+    ]
   }
 }

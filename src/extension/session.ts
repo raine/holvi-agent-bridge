@@ -56,6 +56,8 @@ export function validateRuntimeConfig(
     /^([^/+]+)\+([^/]+)$/,
   );
   const groupPoolHandle = groupParts?.[1] || "";
+  const configuredMaximum = staticConfig.maxDownloadBytes ?? 1073741824;
+  const maxDownloadBytes = config.maxDownloadBytes ?? configuredMaximum;
   if (
     !groupParts ||
     !poolHandlePattern.test(config.poolHandle || "") ||
@@ -69,7 +71,10 @@ export function validateRuntimeConfig(
     new Set(config.capabilities).size !== config.capabilities.length ||
     !Number.isSafeInteger(config.maxFileBytes) ||
     (config.maxFileBytes || 0) < minimumFileBytes ||
-    (config.maxFileBytes || 0) > staticConfig.maxFileBytes
+    (config.maxFileBytes || 0) > staticConfig.maxFileBytes ||
+    !Number.isSafeInteger(maxDownloadBytes) ||
+    maxDownloadBytes < 1 ||
+    maxDownloadBytes > configuredMaximum
   ) {
     throw new Error(
       "The native host supplied an invalid Holvi account boundary.",

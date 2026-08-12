@@ -41,7 +41,9 @@ impl HostProcess {
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
             capabilities: vec!["transactions.read".into()],
             receipt_roots: vec![],
+            export_roots: vec![],
             max_file_bytes: 1024,
+            max_download_bytes: 1024 * 1024,
             hmac_secret: SECRET.into(),
         };
         fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
@@ -73,7 +75,7 @@ impl HostProcess {
 
         let ready = host.read_native();
         assert_eq!(ready["type"], "host_ready");
-        assert_eq!(ready["protocolVersion"], 1);
+        assert_eq!(ready["protocolVersion"], 2);
         assert_eq!(ready["hostVersion"], env!("CARGO_PKG_VERSION"));
         host.send_native(&json!({"type": "tab_ready", "tabId": 7}));
         wait_for_path(&host.socket_path);
@@ -179,10 +181,14 @@ fn native_bridge_routes_signed_requests_across_real_transports() {
         json!({"ok": true, "data": {"status": "ready"}})
     );
 
-    let malformed = signed_value("audit.list", json!({"limit": 0}), "b".repeat(32));
+    let malformed = signed_value(
+        "audit.list",
+        json!({"from":"2020-01-01","to":"2030-01-01","typeClass":null,"query":null,"limit":0,"maxPages":1}),
+        "b".repeat(32),
+    );
     assert_eq!(
         read_socket_response(&mut host.request_value(&malformed)),
-        json!({"ok": false, "error": "Activity limit must be between 1 and 25."})
+        json!({"ok": false, "error": "Activity limit must be between 1 and 5000."})
     );
 
     let authenticated = sign_request(SECRET, Action::Doctor(EmptyParams {})).unwrap();
@@ -196,7 +202,18 @@ fn native_bridge_routes_signed_requests_across_real_transports() {
         })
     );
 
-    let disabled = sign_request(SECRET, Action::AuditList(AuditListParams { limit: 1 })).unwrap();
+    let disabled = sign_request(
+        SECRET,
+        Action::AuditList(AuditListParams {
+            from: "2020-01-01".into(),
+            to: "2030-01-01".into(),
+            type_class: None,
+            query: None,
+            limit: 1,
+            max_pages: 1,
+        }),
+    )
+    .unwrap();
     assert_eq!(
         read_socket_response(&mut host.request(&disabled)),
         json!({

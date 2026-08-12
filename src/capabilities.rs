@@ -2,7 +2,7 @@ use serde::ser::{Serialize, SerializeMap, Serializer};
 
 use crate::protocol::Action;
 
-pub const ACTION_CAPABILITIES: [(&str, &[&str]); 13] = [
+pub const ACTION_CAPABILITIES: [(&str, &[&str]); 23] = [
     ("doctor", &[]),
     ("transactions.list", &["transactions.read"]),
     ("transactions.get", &["transactions.read"]),
@@ -17,10 +17,23 @@ pub const ACTION_CAPABILITIES: [(&str, &[&str]); 13] = [
         "attachments.delete",
         &["transactions.read", "attachments.delete"],
     ),
+    (
+        "attachments.download",
+        &["bookkeeping.read", "attachments.read"],
+    ),
+    ("accounts.list", &["accounts.read"]),
+    ("reports.types", &["reports.read"]),
+    ("reports.export", &["reports.read"]),
+    ("reports.jobs.list", &["reports.read"]),
+    ("reports.jobs.get", &["reports.read"]),
+    ("reports.jobs.create", &["reports.generate"]),
+    ("reports.jobs.download", &["reports.read"]),
+    ("bookkeeping.list", &["bookkeeping.read"]),
     ("bookkeeping.get", &["bookkeeping.read"]),
     ("bookkeeping.categories", &["bookkeeping.read"]),
     ("bookkeeping.suggestions", &["bookkeeping.read"]),
     ("bookkeeping.set-description", &["bookkeeping.write"]),
+    ("audit.types", &["audit.read"]),
     ("audit.list", &["audit.read"]),
 ];
 
@@ -34,11 +47,20 @@ pub fn required_capabilities(action: &Action) -> &'static [&'static str] {
         Action::CommentsCreate(_) => &["transactions.read", "comments.write"],
         Action::AttachmentUpload(_) => &["transactions.read", "attachments.write"],
         Action::AttachmentDelete(_) => &["transactions.read", "attachments.delete"],
-        Action::BookkeepingGet(_)
+        Action::AttachmentDownload(_) => &["bookkeeping.read", "attachments.read"],
+        Action::AccountsList(_) => &["accounts.read"],
+        Action::ReportsTypes(_)
+        | Action::ReportsExport(_)
+        | Action::ReportJobsList(_)
+        | Action::ReportJobsGet(_)
+        | Action::ReportJobsDownload(_) => &["reports.read"],
+        Action::ReportJobsCreate(_) => &["reports.generate"],
+        Action::BookkeepingList(_)
+        | Action::BookkeepingGet(_)
         | Action::BookkeepingCategories(_)
         | Action::BookkeepingSuggestions(_) => &["bookkeeping.read"],
         Action::BookkeepingSetDescription(_) => &["bookkeeping.write"],
-        Action::AuditList(_) => &["audit.read"],
+        Action::AuditTypes(_) | Action::AuditList(_) => &["audit.read"],
     }
 }
 
@@ -89,10 +111,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
 
-    use crate::protocol::{
-        AttachmentDeleteParams, AuditListParams, BookkeepingDescriptionParams, CommentCreateParams,
-        DebtParams, EmptyParams, TransactionParams, UploadParams,
-    };
+    use crate::protocol::*;
 
     use super::*;
 
@@ -157,6 +176,50 @@ mod tests {
                 attachment_code: String::new(),
                 confirmed: false,
             }),
+            Action::AttachmentDownload(AttachmentDownloadParams {
+                debt_uuid: String::new(),
+                attachment_code: String::new(),
+                output_directory: PathBuf::new(),
+            }),
+            Action::AccountsList(EmptyParams {}),
+            Action::ReportsTypes(EmptyParams {}),
+            Action::ReportsExport(ReportExportParams {
+                report_type: String::new(),
+                from: String::new(),
+                to: String::new(),
+                format: String::new(),
+                payment_account_uuid: None,
+                output_directory: PathBuf::new(),
+            }),
+            Action::ReportJobsList(ReportJobListParams {
+                report_type: String::new(),
+                status: None,
+            }),
+            Action::ReportJobsGet(ReportJobParams {
+                report_uuid: String::new(),
+            }),
+            Action::ReportJobsCreate(ReportJobCreateParams {
+                report_type: String::new(),
+                from: String::new(),
+                to: String::new(),
+                payment_account_uuid: None,
+                confirmed: true,
+            }),
+            Action::ReportJobsDownload(ReportJobDownloadParams {
+                report_uuid: String::new(),
+                output_directory: PathBuf::new(),
+            }),
+            Action::BookkeepingList(BookkeepingListParams {
+                from: String::new(),
+                to: String::new(),
+                bookkeeping_status: None,
+                payment_account_uuid: None,
+                uncategorised: false,
+                no_vat: false,
+                no_attachment: false,
+                external_transactions: false,
+                max_pages: 1,
+            }),
             Action::BookkeepingGet(DebtParams {
                 debt_uuid: String::new(),
             }),
@@ -170,7 +233,15 @@ mod tests {
                 description: String::new(),
                 confirmed: false,
             }),
-            Action::AuditList(AuditListParams { limit: 1 }),
+            Action::AuditTypes(EmptyParams {}),
+            Action::AuditList(AuditListParams {
+                from: "2020-01-01".into(),
+                to: "2030-01-01".into(),
+                type_class: None,
+                query: None,
+                limit: 1,
+                max_pages: 1,
+            }),
         ];
         let typed: Vec<_> = actions
             .iter()

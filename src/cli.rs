@@ -25,10 +25,12 @@ use crate::config::{
 use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
 use crate::install::{HostRestartStatus, InstallOptions, InstallResult, install_bridge};
 use crate::protocol::{
-    Action, AttachmentDeleteParams, AuditListParams, BOOKKEEPING_DESCRIPTION_MAX_BYTES,
-    BookkeepingDescriptionParams, CommentCreateParams, DebtParams, EmptyParams, HOST_BUILD_VERSION,
+    Action, AttachmentDeleteParams, AttachmentDownloadParams, AuditListParams,
+    BOOKKEEPING_DESCRIPTION_MAX_BYTES, BookkeepingDescriptionParams, BookkeepingListParams,
+    CommentCreateParams, DEFAULT_MAX_DOWNLOAD_BYTES, DebtParams, EmptyParams, HOST_BUILD_VERSION,
     MAX_COMMENT_CONTENT_BYTES, MAX_SOCKET_RESPONSE_BYTES, NATIVE_PROTOCOL_VERSION,
-    TransactionParams, UploadParams, sign_request, validate_attachment_code,
+    ReportExportParams, ReportJobCreateParams, ReportJobDownloadParams, ReportJobListParams,
+    ReportJobParams, TransactionParams, UploadParams, sign_request, validate_attachment_code,
 };
 use crate::receipt_sandbox::resolve_receipt_file;
 use crate::skill::{self, CodingAgentArg};
@@ -67,7 +69,17 @@ enum Command {
     Doctor(OutputArgs),
     /// List transactions or inspect their details and comments
     Transactions(TransactionsArgs),
-    /// Upload or delete debt attachments
+    /// Discover configured-pool payment accounts
+    Accounts {
+        #[command(subcommand)]
+        command: AccountsCommand,
+    },
+    /// Export reports and manage report jobs
+    Reports {
+        #[command(subcommand)]
+        command: ReportsCommand,
+    },
+    /// Upload, delete, or download debt attachments
     Attachments {
         #[command(subcommand)]
         command: AttachmentsCommand,
@@ -93,15 +105,50 @@ enum ConfigCommand {
 }
 
 #[derive(Subcommand)]
+enum AccountsCommand {
+    /// List configured-pool payment accounts
+    List(OutputArgs),
+}
+
+#[derive(Subcommand)]
 enum AttachmentsCommand {
     /// Validate or upload one receipt
     Upload(UploadArgs),
     /// Preview or delete one attachment from one debt
     Delete(AttachmentDeleteArgs),
+    /// Download an attachment after verifying debt ownership
+    Download(AttachmentDownloadArgs),
+}
+
+#[derive(Subcommand)]
+enum ReportsCommand {
+    /// List supported report types
+    Types(OutputArgs),
+    /// Stream a direct report into an approved directory
+    Export(ReportExportArgs),
+    /// Manage asynchronous report jobs
+    Jobs {
+        #[command(subcommand)]
+        command: ReportJobsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReportJobsCommand {
+    /// List jobs for an asynchronous report type
+    List(ReportJobListArgs),
+    /// Find one configured-pool report job
+    Get(ReportJobGetArgs),
+    /// Preview or create an asynchronous report job
+    Create(ReportJobCreateArgs),
+    /// Stream a ready report job into an approved directory
+    Download(ReportJobDownloadArgs),
 }
 
 #[derive(Subcommand)]
 enum BookkeepingCommand {
+    /// List bookkeeping documents across a bounded date range
+    List(BookkeepingListArgs),
     /// Inspect bookkeeping details and active line items
     Get(DebtArgs),
     /// List bookkeeping categories
@@ -114,11 +161,10 @@ enum BookkeepingCommand {
 
 #[derive(Subcommand)]
 enum AuditCommand {
-    /// List recent pool activity
-    List {
-        #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u8).range(1..=25))]
-        limit: u8,
-    },
+    /// List available activity type classes
+    Types(OutputArgs),
+    /// List historical pool activity
+    List(AuditListArgs),
 }
 
 #[derive(Args)]
@@ -161,6 +207,12 @@ struct InstallArgs {
     /// Allow receipt files below this directory (repeatable)
     #[arg(long = "receipt-root")]
     receipt_roots: Vec<PathBuf>,
+    /// Allow exported files below this directory (repeatable)
+    #[arg(long = "export-root")]
+    export_roots: Vec<PathBuf>,
+    /// Maximum bytes accepted for one download
+    #[arg(long, default_value_t = DEFAULT_MAX_DOWNLOAD_BYTES)]
+    max_download_bytes: u64,
     /// Print machine-readable JSON
     #[arg(long)]
     json: bool,
@@ -246,6 +298,112 @@ struct AttachmentDeleteArgs {
 }
 
 #[derive(Args)]
+struct AttachmentDownloadArgs {
+    #[arg(long)]
+    debt: String,
+    #[arg(long)]
+    attachment: String,
+    #[arg(long)]
+    output: PathBuf,
+}
+
+#[derive(Args)]
+struct ReportExportArgs {
+    #[arg(long = "type", value_parser = parse_direct_report_type)]
+    report_type: String,
+    #[arg(long, value_parser = parse_date)]
+    from: String,
+    #[arg(long, value_parser = parse_date)]
+    to: String,
+    #[arg(long)]
+    format: String,
+    #[arg(long)]
+    account: Option<String>,
+    #[arg(long)]
+    output: PathBuf,
+}
+
+#[derive(Args)]
+struct ReportJobListArgs {
+    #[arg(long = "type", value_parser = parse_async_report_type)]
+    report_type: String,
+    #[arg(long)]
+    status: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct ReportJobGetArgs {
+    #[arg(long)]
+    report: String,
+}
+
+#[derive(Args)]
+struct ReportJobCreateArgs {
+    #[arg(long = "type", value_parser = parse_async_report_type)]
+    report_type: String,
+    #[arg(long, value_parser = parse_date)]
+    from: String,
+    #[arg(long, value_parser = parse_date)]
+    to: String,
+    #[arg(long)]
+    account: Option<String>,
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args)]
+struct ReportJobDownloadArgs {
+    #[arg(long)]
+    report: String,
+    #[arg(long)]
+    output: PathBuf,
+}
+
+#[derive(Args)]
+struct BookkeepingListArgs {
+    #[arg(long, value_parser = parse_date)]
+    from: String,
+    #[arg(long, value_parser = parse_date)]
+    to: String,
+    #[arg(long)]
+    status: Option<String>,
+    #[arg(long)]
+    account: Option<String>,
+    #[arg(long)]
+    uncategorised: bool,
+    #[arg(long)]
+    no_vat: bool,
+    #[arg(long)]
+    no_attachment: bool,
+    #[arg(long)]
+    external_transactions: bool,
+    #[arg(long, default_value_t = 40)]
+    max_pages: u16,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct AuditListArgs {
+    #[arg(long, value_parser = parse_date)]
+    from: String,
+    #[arg(long, value_parser = parse_date)]
+    to: String,
+    #[arg(long)]
+    type_class: Option<String>,
+    #[arg(long)]
+    query: Option<String>,
+    #[arg(long, default_value_t = 5000)]
+    limit: u16,
+    #[arg(long, default_value_t = 200)]
+    max_pages: u16,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
 struct BookkeepingDescriptionArgs {
     #[arg(long, value_name = "DEBT_OR_PAYMENT_URL")]
     debt: String,
@@ -308,6 +466,8 @@ pub async fn run() -> Result<()> {
             payment_account_uuid: args.account,
             capabilities: args.capabilities,
             receipt_roots: args.receipt_roots,
+            export_roots: args.export_roots,
+            max_download_bytes: args.max_download_bytes,
         })?;
         if json_output {
             println!("{}", serde_json::to_string_pretty(&result)?);
@@ -428,6 +588,92 @@ pub async fn run() -> Result<()> {
                 }
             },
         },
+        Command::Accounts { command } => match command {
+            AccountsCommand::List(args) => {
+                let result =
+                    request_host(&config.hmac_secret, Action::AccountsList(EmptyParams {})).await?;
+                if args.json {
+                    print_json(&result)?;
+                } else {
+                    print_accounts(&result);
+                }
+            }
+        },
+        Command::Reports { command } => match command {
+            ReportsCommand::Types(_) => print_json(
+                &request_host(&config.hmac_secret, Action::ReportsTypes(EmptyParams {})).await?,
+            )?,
+            ReportsCommand::Export(args) => {
+                ensure!(args.from <= args.to, "--from must be on or before --to.");
+                print_json(
+                    &request_host(
+                        &config.hmac_secret,
+                        Action::ReportsExport(ReportExportParams {
+                            report_type: args.report_type,
+                            from: args.from,
+                            to: args.to,
+                            format: args.format,
+                            payment_account_uuid: args.account,
+                            output_directory: args.output,
+                        }),
+                    )
+                    .await?,
+                )?;
+            }
+            ReportsCommand::Jobs { command } => match command {
+                ReportJobsCommand::List(args) => print_json(
+                    &request_host(
+                        &config.hmac_secret,
+                        Action::ReportJobsList(ReportJobListParams {
+                            report_type: args.report_type,
+                            status: args.status,
+                        }),
+                    )
+                    .await?,
+                )?,
+                ReportJobsCommand::Get(args) => print_json(
+                    &request_host(
+                        &config.hmac_secret,
+                        Action::ReportJobsGet(ReportJobParams {
+                            report_uuid: args.report,
+                        }),
+                    )
+                    .await?,
+                )?,
+                ReportJobsCommand::Download(args) => print_json(
+                    &request_host(
+                        &config.hmac_secret,
+                        Action::ReportJobsDownload(ReportJobDownloadParams {
+                            report_uuid: args.report,
+                            output_directory: args.output,
+                        }),
+                    )
+                    .await?,
+                )?,
+                ReportJobsCommand::Create(args) => {
+                    ensure!(args.from <= args.to, "--from must be on or before --to.");
+                    if args.yes {
+                        print_json(
+                            &request_host(
+                                &config.hmac_secret,
+                                Action::ReportJobsCreate(ReportJobCreateParams {
+                                    report_type: args.report_type,
+                                    from: args.from,
+                                    to: args.to,
+                                    payment_account_uuid: args.account,
+                                    confirmed: true,
+                                }),
+                            )
+                            .await?,
+                        )?;
+                    } else {
+                        print_json(
+                            &json!({"dryRun": true, "report": {"type": args.report_type, "from": args.from, "to": args.to, "pool": config.pool_handle, "paymentAccountUuid": args.account}, "next": "Repeat the report job creation command with --yes after checking these values."}),
+                        )?;
+                    }
+                }
+            },
+        },
         Command::Attachments { command } => match command {
             AttachmentsCommand::Upload(args) => {
                 let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
@@ -459,6 +705,21 @@ pub async fn run() -> Result<()> {
                     }))?;
                 }
             }
+            AttachmentsCommand::Download(args) => {
+                let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
+                validate_attachment_code(&args.attachment)?;
+                print_json(
+                    &request_host(
+                        &config.hmac_secret,
+                        Action::AttachmentDownload(AttachmentDownloadParams {
+                            debt_uuid,
+                            attachment_code: args.attachment,
+                            output_directory: args.output,
+                        }),
+                    )
+                    .await?,
+                )?;
+            }
             AttachmentsCommand::Delete(args) => {
                 let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
                 validate_attachment_code(&args.attachment)?;
@@ -476,6 +737,26 @@ pub async fn run() -> Result<()> {
             }
         },
         Command::Bookkeeping { command } => match command {
+            BookkeepingCommand::List(args) => {
+                ensure!(args.from <= args.to, "--from must be on or before --to.");
+                print_json(
+                    &request_host(
+                        &config.hmac_secret,
+                        Action::BookkeepingList(BookkeepingListParams {
+                            from: args.from,
+                            to: args.to,
+                            bookkeeping_status: args.status,
+                            payment_account_uuid: args.account,
+                            uncategorised: args.uncategorised,
+                            no_vat: args.no_vat,
+                            no_attachment: args.no_attachment,
+                            external_transactions: args.external_transactions,
+                            max_pages: args.max_pages,
+                        }),
+                    )
+                    .await?,
+                )?;
+            }
             BookkeepingCommand::Get(args) => {
                 let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
                 print_json(
@@ -523,11 +804,22 @@ pub async fn run() -> Result<()> {
             }
         },
         Command::Audit { command } => match command {
-            AuditCommand::List { limit } => {
+            AuditCommand::Types(_) => print_json(
+                &request_host(&config.hmac_secret, Action::AuditTypes(EmptyParams {})).await?,
+            )?,
+            AuditCommand::List(args) => {
+                ensure!(args.from <= args.to, "--from must be on or before --to.");
                 print_json(
                     &request_host(
                         &config.hmac_secret,
-                        Action::AuditList(AuditListParams { limit }),
+                        Action::AuditList(AuditListParams {
+                            from: args.from,
+                            to: args.to,
+                            type_class: args.type_class,
+                            query: args.query,
+                            limit: args.limit,
+                            max_pages: args.max_pages,
+                        }),
                     )
                     .await?,
                 )?;
@@ -655,6 +947,30 @@ fn parse_debt_target(value: &str, configured_group: &str) -> Result<String> {
     let debt_uuid = segments[3];
     validate_uuid(debt_uuid, "Debt")?;
     Ok(debt_uuid.to_owned())
+}
+
+fn parse_direct_report_type(value: &str) -> std::result::Result<String, String> {
+    if [
+        "account-statement",
+        "journal",
+        "ledger",
+        "camt052",
+        "invoicing",
+    ]
+    .contains(&value)
+    {
+        Ok(value.to_owned())
+    } else {
+        Err("must be account-statement, journal, ledger, camt052, or invoicing".into())
+    }
+}
+
+fn parse_async_report_type(value: &str) -> std::result::Result<String, String> {
+    if ["all-in-one-pdf", "all-in-one-zip"].contains(&value) {
+        Ok(value.to_owned())
+    } else {
+        Err("must be all-in-one-pdf or all-in-one-zip".into())
+    }
 }
 
 fn parse_date(value: &str) -> std::result::Result<String, String> {
@@ -1171,6 +1487,44 @@ fn format_cell(value: Option<&Value>, width: usize) -> String {
     }
 }
 
+fn print_accounts(value: &Value) {
+    let results = value
+        .get("results")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for account in results {
+        let uuid = account
+            .get("paymentAccountUuid")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let name = account
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("Payment account");
+        let currency = account
+            .get("currency")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let iban = account.get("iban").and_then(Value::as_str).unwrap_or("");
+        let suffix: String = iban
+            .chars()
+            .filter(|character| character.is_alphanumeric())
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let masked = if suffix.is_empty() {
+            "-".to_owned()
+        } else {
+            format!("•••• {suffix}")
+        };
+        println!("{name}\t{uuid}\t{currency}\t{masked}");
+    }
+}
+
 fn print_transactions(transactions: TransactionResult) {
     let columns = [10, 28, 12, 8, 36];
     println!(
@@ -1501,14 +1855,38 @@ mod tests {
             .is_err()
         );
 
-        let audit = Cli::try_parse_from(["holvi", "audit", "list", "--limit", "25"]).unwrap();
+        let audit = Cli::try_parse_from([
+            "holvi",
+            "audit",
+            "list",
+            "--from",
+            "2020-01-01",
+            "--to",
+            "2030-01-01",
+            "--limit",
+            "25",
+        ])
+        .unwrap();
         assert!(matches!(
             audit.command,
             Some(Command::Audit {
-                command: AuditCommand::List { limit: 25 }
+                command: AuditCommand::List(AuditListArgs { limit: 25, .. })
             })
         ));
-        assert!(Cli::try_parse_from(["holvi", "audit", "list", "--limit", "26"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "holvi",
+                "audit",
+                "list",
+                "--from",
+                "2020-01-01",
+                "--to",
+                "2030-01-01",
+                "--limit",
+                "5001",
+            ])
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1654,7 +2032,9 @@ mod tests {
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
             capabilities: vec!["transactions.read".into()],
             receipt_roots: vec![],
+            export_roots: vec![],
             max_file_bytes: 1024,
+            max_download_bytes: 1024 * 1024,
             hmac_secret: "a".repeat(64),
         };
         let mut doctor = DoctorResult {

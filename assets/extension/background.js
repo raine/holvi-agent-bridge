@@ -423,7 +423,7 @@
     if (items.length > maxBookkeepingItems) {
       throw new Error("Holvi bookkeeping debt exceeded its item limit.");
     }
-    const attachments = boundedArray(debt.attachments, "Bookkeeping debt attachments", maxDebtAttachments, true);
+    const attachments = debtAttachments(debt.attachments, "Bookkeeping debt");
     const responseUuid = uuid(debt.uuid, "Bookkeeping debt UUID");
     const requestedUuid = uuid(debtUuid, "Debt UUID");
     if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
@@ -451,6 +451,7 @@
       paymentAccountUuid: optionalUuid(debt.payment_account_uuid, "Bookkeeping payment account"),
       connectionUuid: optionalUuid(debt.connection_uuid, "Bookkeeping connection"),
       attachmentCount: attachments.length,
+      attachments,
       droppedItemCount: items.length - retained.length,
       items: retained.map(bookkeepingItem)
     });
@@ -519,6 +520,77 @@
       status: optionalString(data.status, "Activity status")
     };
   }
+  function projectAccounts(value) {
+    const pool = record(value, "Pool");
+    const accounts = boundedArray(pool.paymentaccounts, "Payment accounts", 100);
+    const seen = new Set;
+    const results = accounts.map((entry) => {
+      const account = record(entry, "Payment account");
+      const paymentAccountUuid = uuid(account.uuid, "Payment account UUID");
+      if (seen.has(paymentAccountUuid.toLowerCase()))
+        throw new Error("Holvi returned duplicate payment accounts.");
+      seen.add(paymentAccountUuid.toLowerCase());
+      return {
+        paymentAccountUuid,
+        name: optionalString(account.name, "Payment account name"),
+        iban: optionalString(account.iban, "Payment account IBAN"),
+        currency: optionalString(account.currency, "Payment account currency"),
+        state: optionalString(account.state ?? account.status, "Payment account state")
+      };
+    });
+    return projection({ count: results.length, results });
+  }
+  function projectBookkeepingPage(value) {
+    const page = record(value, "Bookkeeping page");
+    const results = boundedArray(page.results, "Bookkeeping results", 100).map((entry) => {
+      const debt = record(entry, "Bookkeeping list debt");
+      return projectBookkeepingDebt(debt, uuid(debt.uuid, "Bookkeeping debt UUID"));
+    });
+    return projection({
+      results,
+      next: optionalString(page.next, "Bookkeeping next page") ?? ""
+    });
+  }
+  function projectReportJobs(value) {
+    const page = record(value, "Report jobs");
+    const seen = new Set;
+    const results = boundedArray(page.results, "Report job results", 100).map((entry) => {
+      const job = record(entry, "Report job");
+      const reportUuid = uuid(job.uuid, "Report UUID");
+      if (seen.has(reportUuid.toLowerCase()))
+        throw new Error("Holvi returned duplicate report jobs.");
+      seen.add(reportUuid.toLowerCase());
+      const reportType = boundedString(job.report_type, "Report type");
+      if (!["single_pdf", "zip_export"].includes(reportType))
+        throw new Error("Holvi returned an unsupported report type.");
+      const status = boundedString(job.status, "Report status");
+      if (!["initiated", "ready", "error"].includes(status))
+        throw new Error("Holvi returned an unsupported report status.");
+      return {
+        reportUuid,
+        reportType,
+        status,
+        fromDate: boundedString(job.from_date, "Report start date"),
+        toDate: boundedString(job.to_date, "Report end date"),
+        paymentAccountUuid: optionalUuid(job.payment_account_uuid, "Report payment account"),
+        createTime: timestamp(job.create_time, "Report creation time"),
+        availableUntil: job.available_until ? timestamp(job.available_until, "Report availability") : null
+      };
+    });
+    return projection({ count: results.length, results });
+  }
+  function projectAuditTypes(value) {
+    const source = Array.isArray(value) ? value : boundedArray(record(value, "Activity types").results, "Activity types", 200);
+    const results = source.map((entry) => typeof entry === "string" ? boundedString(entry, "Activity type") : boundedString(record(entry, "Activity type").value ?? record(entry, "Activity type").code, "Activity type"));
+    return projection({ count: results.length, results });
+  }
+  function projectAuditTraversalPage(value) {
+    const page = record(value, "Activity page");
+    return projection({
+      results: boundedArray(page.results, "Activity results", 25).map(auditEntry),
+      next: optionalString(page.next, "Activity next page") ?? ""
+    });
+  }
   function projectAuditPage(value, limit) {
     if (!Number.isInteger(limit) || limit < 1 || limit > maxAuditResults) {
       throw new Error("Activity limit is outside the configured range.");
@@ -558,10 +630,20 @@
     "comments.create": ["transactions.read", "comments.write"],
     "attachments.upload": ["transactions.read", "attachments.write"],
     "attachments.delete": ["transactions.read", "attachments.delete"],
+    "attachments.download": ["bookkeeping.read", "attachments.read"],
+    "accounts.list": ["accounts.read"],
+    "reports.types": ["reports.read"],
+    "reports.export": ["reports.read"],
+    "reports.jobs.list": ["reports.read"],
+    "reports.jobs.get": ["reports.read"],
+    "reports.jobs.create": ["reports.generate"],
+    "reports.jobs.download": ["reports.read"],
+    "bookkeeping.list": ["bookkeeping.read"],
     "bookkeeping.get": ["bookkeeping.read"],
     "bookkeeping.categories": ["bookkeeping.read"],
     "bookkeeping.suggestions": ["bookkeeping.read"],
     "bookkeeping.set-description": ["bookkeeping.write"],
+    "audit.types": ["audit.read"],
     "audit.list": ["audit.read"]
   };
   var supportedCapabilities = new Set(Object.values(actionCapabilities).flat());
@@ -601,7 +683,9 @@
     const config = value;
     const groupParts = (config.groupPathSegment || "").match(/^([^/+]+)\+([^/]+)$/);
     const groupPoolHandle = groupParts?.[1] || "";
-    if (!groupParts || !poolHandlePattern.test(config.poolHandle || "") || groupPoolHandle !== config.poolHandle || !uuidPattern2.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < minimumFileBytes || (config.maxFileBytes || 0) > staticConfig.maxFileBytes) {
+    const configuredMaximum = staticConfig.maxDownloadBytes ?? 1073741824;
+    const maxDownloadBytes = config.maxDownloadBytes ?? configuredMaximum;
+    if (!groupParts || !poolHandlePattern.test(config.poolHandle || "") || groupPoolHandle !== config.poolHandle || !uuidPattern2.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < minimumFileBytes || (config.maxFileBytes || 0) > staticConfig.maxFileBytes || !Number.isSafeInteger(maxDownloadBytes) || maxDownloadBytes < 1 || maxDownloadBytes > configuredMaximum) {
       throw new Error("The native host supplied an invalid Holvi account boundary.");
     }
     return config;
@@ -974,8 +1058,61 @@
   }
 
   // src/extension/holvi-api.ts
+  var reportTypes = Object.freeze([
+    {
+      type: "account-statement",
+      backend: "account-statement",
+      mode: "direct",
+      formats: ["pdf", "xls"],
+      accountRequired: true,
+      maxMonths: 12
+    },
+    {
+      type: "journal",
+      backend: "journal-v2",
+      mode: "direct",
+      formats: ["xls"],
+      accountRequired: false
+    },
+    {
+      type: "ledger",
+      backend: "ledger-v2",
+      mode: "direct",
+      formats: ["xls"],
+      accountRequired: false
+    },
+    {
+      type: "camt052",
+      backend: "camt052",
+      mode: "direct",
+      formats: ["xml"],
+      accountRequired: true
+    },
+    {
+      type: "invoicing",
+      backend: "invoicing",
+      mode: "direct",
+      formats: ["xls"],
+      accountRequired: false
+    },
+    {
+      type: "all-in-one-pdf",
+      backend: "single_pdf",
+      mode: "async",
+      formats: ["pdf"],
+      accountRequired: true,
+      maxMonths: 12
+    },
+    {
+      type: "all-in-one-zip",
+      backend: "zip_export",
+      mode: "async",
+      formats: ["zip"],
+      accountRequired: false
+    }
+  ]);
   var auditLimitMin = 1;
-  var auditLimitMax = 25;
+  var auditLimitMax = 5000;
   var auditPageSize = 25;
   var maxApiResponseBytes = 2 * 1024 * 1024;
   var commentPageSize = 25;
@@ -1256,6 +1393,353 @@
       const validUuid = validateUuid(debtUuid, "debt");
       return projectSuggestions(await this.request(auth, `${this.debtPath(validUuid)}haip/bookkeeping-suggestions/`), validUuid);
     }
+    async downloadResponse(auth, action, params) {
+      if (action === "attachments.download") {
+        const debtUuid = validateUuid(asString(params.debtUuid), "debt");
+        const preview = await this.previewDebt(auth, debtUuid);
+        const matches = preview.attachments.filter((item) => item.attachmentCode === params.attachmentCode);
+        if (matches.length !== 1)
+          throw new Error("Attachment does not belong uniquely to the requested debt.");
+        const code = asString(params.attachmentCode);
+        if (!code || Array.from(code).some((character) => character.charCodeAt(0) < 32))
+          throw new Error("Attachment code is invalid.");
+        const redirect = await this.fetchRequest(`https://app.holvi.com/attachment/${encodeURIComponent(code)}/`, { credentials: "include", cache: "no-store", redirect: "manual" });
+        if (![301, 302, 303, 307, 308].includes(redirect.status))
+          throw new Error("Holvi attachment download did not return an expected redirect.");
+        const signed = this.signedStorageUrl(redirect.headers.get("location") || "");
+        const response = await this.fetchRequest(signed, {
+          credentials: "omit",
+          cache: "no-store",
+          redirect: "error"
+        });
+        this.validateDownloadResponse(response, ["https://storage.holvi.com"], "/media/");
+        const attachment = matches[0];
+        const extension = asString(attachment.format).replace(/[^a-z0-9]/gi, "").toLowerCase() || "bin";
+        return {
+          response,
+          fileName: `holvi-attachment-${debtUuid}.${extension}`,
+          metadata: { debtUuid, attachmentCode: code }
+        };
+      }
+      if (action === "reports.export") {
+        const spec = reportTypes.find((entry) => entry.type === params.reportType && entry.mode === "direct");
+        if (!spec || !spec.formats.includes(asString(params.format)))
+          throw new Error("Unsupported direct report type or format.");
+        if (spec.accountRequired && !params.paymentAccountUuid)
+          throw new Error("This report requires a payment account.");
+        const accounts = await this.accounts(auth);
+        if (params.paymentAccountUuid && !accounts.results.some((account) => account.paymentAccountUuid === params.paymentAccountUuid))
+          throw new Error("Payment account does not belong to the configured pool.");
+        const query = new URLSearchParams({
+          start_date: asString(params.from),
+          end_date: asString(params.to),
+          format: asString(params.format)
+        });
+        if (params.paymentAccountUuid)
+          query.set("payment_account_uuid", asString(params.paymentAccountUuid));
+        const response = await this.fetchRequest(`https://app.holvi.com/group/${encodeURIComponent(this.session.config.poolHandle)}/reports/${spec.backend}/?${query}`, { credentials: "include", cache: "no-store", redirect: "error" });
+        this.validateDownloadResponse(response, ["https://app.holvi.com"], `/group/${this.session.config.poolHandle}/reports/`);
+        const extension = asString(params.format);
+        return {
+          response,
+          fileName: `holvi-${spec.type}-${asString(params.from)}-${asString(params.to)}.${extension}`,
+          metadata: { reportType: spec.type }
+        };
+      }
+      if (action === "reports.jobs.download") {
+        const reportUuid = validateUuid(asString(params.reportUuid), "report");
+        const job = await this.reportJob(auth, reportUuid);
+        if (job.status !== "ready")
+          throw new Error("Report is not ready for download.");
+        const linkValue = await this.reportingRequest(auth, `/api/reporting/reports/${reportUuid}/download/`);
+        const link = asString(linkValue?.link);
+        const signed = this.signedStorageUrl(link);
+        const response = await this.fetchRequest(signed, {
+          credentials: "omit",
+          cache: "no-store",
+          redirect: "error"
+        });
+        this.validateDownloadResponse(response, ["https://storage.holvi.com"], "/media/");
+        const extension = job.reportType === "zip_export" ? "zip" : "pdf";
+        return {
+          response,
+          fileName: `holvi-${asString(job.fromDate)}-${asString(job.toDate)}.${extension}`,
+          metadata: { reportUuid, reportType: job.reportType }
+        };
+      }
+      throw new Error("Unsupported download action.");
+    }
+    signedStorageUrl(value) {
+      let url;
+      try {
+        url = new URL(value);
+      } catch {
+        throw new Error("Holvi returned an invalid download link.");
+      }
+      if (url.protocol !== "https:" || url.origin !== "https://storage.holvi.com" || !url.pathname.startsWith("/media/") || url.username || url.password || url.hash)
+        throw new Error("Holvi returned an invalid download link.");
+      return url;
+    }
+    validateDownloadResponse(response, origins, pathPrefix) {
+      const finalUrl = new URL(response.url);
+      if (!response.ok || !origins.includes(finalUrl.origin) || !finalUrl.pathname.startsWith(pathPrefix) || finalUrl.username || finalUrl.password || finalUrl.hash)
+        throw new Error("Holvi download response failed validation.");
+      const contentLength = response.headers.get("content-length");
+      if (contentLength && (!/^\d+$/.test(contentLength) || Number(contentLength) > (this.session.config.maxDownloadBytes ?? 1073741824)))
+        throw new Error("Download exceeds the configured size limit.");
+      const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim() || "";
+      const allowedMimeTypes = new Set([
+        "application/pdf",
+        "application/zip",
+        "application/xml",
+        "text/xml",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/octet-stream",
+        "image/png",
+        "image/jpeg",
+        "image/gif"
+      ]);
+      if (!allowedMimeTypes.has(contentType))
+        throw new Error("Holvi download content type is invalid.");
+      const disposition = response.headers.get("content-disposition");
+      if (disposition && (disposition.length > 1024 || Array.from(disposition).some((character) => character.charCodeAt(0) < 32 && character !== "\t")))
+        throw new Error("Holvi download disposition is invalid.");
+    }
+    async accounts(auth) {
+      return projectAccounts(await this.request(auth, this.session.apiRoot()));
+    }
+    reportTypeCatalog() {
+      return reportTypes;
+    }
+    async reportingRequest(auth, path, options = {}) {
+      const parsed = new URL(path, this.staticConfig.apiOrigin);
+      if ((parsed.pathname !== "/api/reporting/reports/" || !["", "?"].includes(path.slice(parsed.pathname.length, parsed.pathname.length + 1))) && !/^\/api\/reporting\/reports\/[0-9a-f-]{36}\/download\/$/i.test(path)) {
+        throw new Error("Refused an unsupported reporting API path.");
+      }
+      const headers = new Headers(options.headers || {});
+      headers.set("Accept", "application/json");
+      headers.set("Authorization", `Bearer ${auth.token}`);
+      if (auth.csrfToken)
+        headers.set("X-CSRFToken", auth.csrfToken);
+      const response = await this.fetchRequest(`${this.staticConfig.apiOrigin}${path}`, {
+        ...options,
+        headers,
+        credentials: "include",
+        cache: "no-store",
+        redirect: "error"
+      });
+      const text = await boundedResponseText(response, maxApiResponseBytes);
+      if (!response.ok)
+        throw new Error(`Holvi reporting API returned ${response.status}.`);
+      if (!text)
+        return null;
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error("Holvi reporting API returned malformed JSON.");
+      }
+    }
+    async reportJobs(auth, params) {
+      const spec = reportTypes.find((entry) => entry.type === params.reportType && entry.mode === "async");
+      if (!spec)
+        throw new Error("Unsupported report type.");
+      const query = new URLSearchParams({
+        report_type: spec.backend,
+        o: "-create_time",
+        page_size: "50",
+        pool: this.session.config.poolHandle
+      });
+      if (typeof params.status === "string")
+        query.set("status", params.status);
+      return projectReportJobs(await this.reportingRequest(auth, `/api/reporting/reports/?${query}`));
+    }
+    async reportJob(auth, reportUuid) {
+      validateUuid(reportUuid, "report");
+      const matches = [];
+      for (const spec of reportTypes.filter((entry) => entry.mode === "async")) {
+        const listing = await this.reportJobs(auth, { reportType: spec.type });
+        matches.push(...listing.results.filter((job) => String(job.reportUuid).toLowerCase() === reportUuid.toLowerCase()));
+      }
+      if (matches.length !== 1)
+        throw new Error("Report does not belong uniquely to the configured pool.");
+      return matches[0];
+    }
+    async createReportJob(auth, params) {
+      if (params.confirmed !== true)
+        throw new Error("Report generation requires explicit confirmation.");
+      const spec = reportTypes.find((entry) => entry.type === params.reportType && entry.mode === "async");
+      if (!spec)
+        throw new Error("Unsupported report type.");
+      if (spec.accountRequired && !params.paymentAccountUuid)
+        throw new Error("This report requires a payment account.");
+      const body = {
+        from_date: params.from,
+        to_date: params.to,
+        report_type: spec.backend,
+        pool: this.session.config.poolHandle
+      };
+      if (params.paymentAccountUuid) {
+        const accounts = await this.accounts(auth);
+        if (!accounts.results.some((account) => account.paymentAccountUuid === params.paymentAccountUuid))
+          throw new Error("Payment account does not belong to the configured pool.");
+        body.payment_account_uuid = params.paymentAccountUuid;
+      }
+      await this.reportingRequest(auth, "/api/reporting/reports/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      return { accepted: true };
+    }
+    continuation(next, endpoint, allowed) {
+      if (next.length > 4096)
+        throw new Error("Holvi pagination URL exceeded its limit.");
+      const url = new URL(next, this.staticConfig.apiOrigin);
+      if (url.origin !== this.staticConfig.apiOrigin || url.pathname !== endpoint || url.username || url.password || url.hash || [...url.searchParams.keys()].some((key) => !allowed.has(key)))
+        throw new Error("Holvi pagination changed the target endpoint.");
+      return `${endpoint}${url.search}`;
+    }
+    async listBookkeeping(auth, params) {
+      const endpoint = `${this.session.apiRoot()}debt/`;
+      const query = new URLSearchParams({
+        booking_date_gte: asString(params.from),
+        booking_date_lte: asString(params.to),
+        page_size: "100"
+      });
+      if (params.bookkeepingStatus)
+        query.set("bookkeeping_status", asString(params.bookkeepingStatus));
+      if (params.paymentAccountUuid) {
+        const accounts = await this.accounts(auth);
+        if (!accounts.results.some((account) => account.paymentAccountUuid === params.paymentAccountUuid))
+          throw new Error("Payment account does not belong to the configured pool.");
+        query.set("payment_account_uuid", asString(params.paymentAccountUuid));
+      }
+      const orOptions = [
+        ["uncategorised", "uncategorised"],
+        ["noVat", "no_vat"],
+        ["noAttachment", "no_attachment"]
+      ];
+      const ors = orOptions.filter(([key]) => params[key] === true).map(([, value]) => value);
+      if (ors.length)
+        query.set("or_filters", ors.join(","));
+      if (params.externalTransactions === true)
+        query.set("subtype_csv", "external_transaction,card");
+      const allowed = new Set([
+        "booking_date_gte",
+        "booking_date_lte",
+        "page_size",
+        "page",
+        "cursor",
+        "bookkeeping_status",
+        "payment_account_uuid",
+        "or_filters",
+        "subtype_csv"
+      ]);
+      const results = [];
+      const seen = new Set;
+      let path = `${endpoint}?${query}`;
+      let pages = 0;
+      let truncated = false;
+      while (path) {
+        if (seen.has(path))
+          throw new Error("Holvi repeated a bookkeeping pagination URL.");
+        seen.add(path);
+        const page = projectBookkeepingPage(await this.request(auth, path));
+        results.push(...page.results);
+        pages += 1;
+        if (results.length > 20000)
+          throw new Error("Bookkeeping listing exceeded its result limit.");
+        if (page.next && pages >= Number(params.maxPages)) {
+          truncated = true;
+          break;
+        }
+        path = page.next ? this.continuation(page.next, endpoint, allowed) : "";
+      }
+      const ids = results.map((entry) => String(entry.debtUuid).toLowerCase());
+      if (new Set(ids).size !== ids.length)
+        throw new Error("Holvi returned duplicate bookkeeping debts.");
+      return {
+        pages,
+        count: results.length,
+        truncated,
+        filters: {
+          from: params.from,
+          to: params.to,
+          paymentAccountUuid: params.paymentAccountUuid ?? null,
+          orFilters: ors,
+          subtypes: params.externalTransactions === true ? ["external_transaction", "card"] : []
+        },
+        results
+      };
+    }
+    async auditTypes(auth) {
+      return projectAuditTypes(await this.request(auth, `${this.session.apiRoot()}log-feed/type-classes/`));
+    }
+    async historicalAudit(auth, params) {
+      const endpoint = `${this.session.apiRoot()}log-feed/`;
+      const query = new URLSearchParams({
+        o: "-timestamp",
+        page_size: String(auditPageSize),
+        timestamp_from: asString(params.from),
+        timestamp_to: asString(params.to)
+      });
+      if (params.typeClass) {
+        const types = await this.auditTypes(auth);
+        if (!types.results.includes(asString(params.typeClass))) {
+          throw new Error("Activity type class is unavailable for the configured pool.");
+        }
+        query.set("type_class", asString(params.typeClass));
+      }
+      if (params.query)
+        query.set("q", asString(params.query));
+      const allowed = new Set([
+        "o",
+        "page_size",
+        "timestamp_from",
+        "timestamp_to",
+        "type_class",
+        "q",
+        "page",
+        "cursor"
+      ]);
+      const results = [];
+      const seen = new Set;
+      let path = `${endpoint}?${query}`;
+      let pages = 0;
+      let truncated = false;
+      while (path && results.length < Number(params.limit)) {
+        if (seen.has(path))
+          throw new Error("Holvi repeated an activity pagination URL.");
+        seen.add(path);
+        const page = projectAuditTraversalPage(await this.request(auth, path));
+        results.push(...page.results);
+        pages += 1;
+        if (page.next && (pages >= Number(params.maxPages) || results.length >= Number(params.limit))) {
+          truncated = true;
+          break;
+        }
+        path = page.next ? this.continuation(page.next, endpoint, allowed) : "";
+      }
+      const limited = results.slice(0, Number(params.limit));
+      for (let index = 1;index < limited.length; index += 1)
+        if (Date.parse(String(limited[index - 1]?.timestamp)) < Date.parse(String(limited[index]?.timestamp)))
+          throw new Error("Holvi activity feed is not ordered newest first.");
+      return {
+        pages,
+        count: limited.length,
+        returnedCount: limited.length,
+        truncated: truncated || results.length > limited.length,
+        order: "newest-first",
+        filters: {
+          from: params.from,
+          to: params.to,
+          typeClass: params.typeClass ?? null,
+          query: params.query ?? null
+        },
+        results: limited
+      };
+    }
     async recentAudit(auth, limit) {
       if (!Number.isSafeInteger(limit) || limit < auditLimitMin || limit > auditLimitMax) {
         throw new Error("Activity limit must be between 1 and 25.");
@@ -1353,6 +1837,12 @@
         "comments.list": (auth, params) => this.api.listComments(auth, asString2(params.debtUuid)),
         "comments.create": (auth, params) => this.comments.createComment(auth, params),
         "attachments.delete": (auth, params) => this.attachmentDeletion.deleteAttachment(auth, params),
+        "accounts.list": (auth) => this.api.accounts(auth),
+        "reports.types": () => Promise.resolve(this.api.reportTypeCatalog()),
+        "reports.jobs.list": (auth, params) => this.api.reportJobs(auth, params),
+        "reports.jobs.get": (auth, params) => this.api.reportJob(auth, asString2(params.reportUuid)),
+        "reports.jobs.create": (auth, params) => this.api.createReportJob(auth, params),
+        "bookkeeping.list": (auth, params) => this.api.listBookkeeping(auth, params),
         "bookkeeping.get": (auth, params) => this.api.bookkeepingDebt(auth, asString2(params.debtUuid)),
         "bookkeeping.categories": (auth) => this.api.bookkeepingCategories(auth),
         "bookkeeping.suggestions": (auth, params) => this.api.bookkeepingSuggestions(auth, asString2(params.debtUuid)),
@@ -1362,7 +1852,8 @@
           description: requiredString(params.description),
           confirmed: asBoolean(params.confirmed)
         }),
-        "audit.list": (auth, params) => this.api.recentAudit(auth, params.limit)
+        "audit.types": (auth) => this.api.auditTypes(auth),
+        "audit.list": (auth, params) => this.api.historicalAudit(auth, params)
       };
     }
     async handle(message) {
@@ -1375,8 +1866,8 @@
         throw new Error("The local helper requested an unsupported action.");
       }
       this.session.requireCapabilities(...requirements);
-      if (action === "attachments.upload") {
-        throw new Error("Receipt uploads require transfer messages.");
+      if (action === "attachments.upload" || action === "attachments.download" || action === "reports.export" || action === "reports.jobs.download") {
+        throw new Error("This action requires transfer messages.");
       }
       const auth = await this.requestAuth();
       return this.handlers[action](auth, message.params || {});
@@ -1571,6 +2062,9 @@
     tabReady: "tab_ready",
     tabUnavailable: "tab_unavailable",
     hostRejected: "host_rejected",
+    downloadStart: "download_start",
+    downloadChunk: "download_chunk",
+    downloadEnd: "download_end",
     result: "result"
   });
   var nativeMessageTypes = Object.freeze({
@@ -1586,6 +2080,9 @@
       nativeMessageType.tabReady,
       nativeMessageType.tabUnavailable,
       nativeMessageType.hostRejected,
+      nativeMessageType.downloadStart,
+      nativeMessageType.downloadChunk,
+      nativeMessageType.downloadEnd,
       nativeMessageType.result
     ]
   });
@@ -1596,16 +2093,18 @@
     tabs;
     commands;
     uploads;
+    api;
     nativePort = null;
     reconnectTimer = null;
     uploadExpiryTimer = null;
     uploadTransfers = new UploadTransferLifecycle;
-    constructor(staticConfig, session, tabs, commands, uploads) {
+    constructor(staticConfig, session, tabs, commands, uploads, api) {
       this.staticConfig = staticConfig;
       this.session = session;
       this.tabs = tabs;
       this.commands = commands;
       this.uploads = uploads;
+      this.api = api;
     }
     connect() {
       if (this.nativePort || this.tabs.size === 0) {
@@ -1673,6 +2172,74 @@
     finishUpload(upload) {
       return this.tabs.requestAuth().then((auth) => this.uploads.uploadReceipt(auth, upload));
     }
+    async streamDownload(id, message) {
+      if (!this.api)
+        throw new Error("Download service is unavailable.");
+      const action = message.action || "";
+      const requirements = requiredCapabilities(action);
+      if (!requirements)
+        throw new Error("The local helper requested an unsupported action.");
+      this.session.requireCapabilities(...requirements);
+      const auth = await this.tabs.requestAuth();
+      const { response, fileName, metadata } = await this.api.downloadResponse(auth, action, message.params || {});
+      if (!response.body)
+        throw new Error("Holvi download returned no body.");
+      const mimeType = response.headers.get("content-type")?.split(";", 1)[0]?.trim() || "application/octet-stream";
+      const declared = response.headers.get("content-length");
+      const expectedSize = declared && /^\d+$/.test(declared) ? Number(declared) : undefined;
+      this.postNative({
+        type: nativeMessageType.downloadStart,
+        id,
+        fileName,
+        mimeType,
+        expectedSize,
+        chunkSize: 491520
+      });
+      const reader = response.body.getReader();
+      let pending = new Uint8Array(0);
+      let index = 0;
+      let size = 0;
+      const send = (bytes) => {
+        let binary = "";
+        for (let offset = 0;offset < bytes.length; offset += 8192)
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+        this.postNative({
+          type: nativeMessageType.downloadChunk,
+          id,
+          index,
+          data: btoa(binary)
+        });
+        index += 1;
+        size += bytes.length;
+        if (size > (this.session.config.maxDownloadBytes ?? 1073741824))
+          throw new Error("Download exceeds the configured size limit.");
+      };
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done)
+          break;
+        const joined = new Uint8Array(pending.length + value.length);
+        joined.set(pending);
+        joined.set(value, pending.length);
+        let offset = 0;
+        while (joined.length - offset >= 491520) {
+          send(joined.subarray(offset, offset + 491520));
+          offset += 491520;
+        }
+        pending = joined.slice(offset);
+      }
+      if (pending.length)
+        send(pending);
+      if (expectedSize !== undefined && expectedSize !== size)
+        throw new Error("Download size differs from its Content-Length.");
+      this.postNative({
+        type: nativeMessageType.downloadEnd,
+        id,
+        chunkCount: index,
+        size
+      });
+      this.postResult(id, true, metadata);
+    }
     handleMessage(value) {
       const message = value;
       if (!message || typeof message !== "object") {
@@ -1704,6 +2271,14 @@
       }
       const id = message.id;
       if (message.type === nativeMessageType.command) {
+        if ([
+          "attachments.download",
+          "reports.export",
+          "reports.jobs.download"
+        ].includes(message.action || "")) {
+          this.streamDownload(id, message).catch((error) => this.postResult(id, false, error));
+          return;
+        }
         this.commands.handle(message).then((data) => this.postResult(id, true, data)).catch((error) => this.postResult(id, false, error));
         return;
       }
@@ -1981,6 +2556,6 @@
   });
   var commands = new CommandService(session, api, () => tabs.requestAuth());
   var uploads = new UploadWorkflow(session, api);
-  nativeBridge = new NativeBridge(staticConfig, session, tabs, commands, uploads);
+  nativeBridge = new NativeBridge(staticConfig, session, tabs, commands, uploads, api);
   chrome.runtime.onConnect.addListener((port) => tabs.register(port));
 })();

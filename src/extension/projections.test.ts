@@ -97,7 +97,13 @@ describe("capability policy", () => {
   test("keeps ordinary command handlers exhaustive with policy", () => {
     expect(Object.keys(commandActions)).toEqual(
       Object.keys(actionCapabilities).filter(
-        (action) => action !== "attachments.upload",
+        (action) =>
+          ![
+            "attachments.upload",
+            "attachments.download",
+            "reports.export",
+            "reports.jobs.download",
+          ].includes(action),
       ),
     );
   });
@@ -114,10 +120,14 @@ describe("capability policy", () => {
     expect(supportedCapabilities).toEqual(
       new Set([
         "transactions.read",
+        "comments.write",
         "attachments.write",
         "attachments.delete",
-        "comments.write",
         "bookkeeping.read",
+        "attachments.read",
+        "accounts.read",
+        "reports.read",
+        "reports.generate",
         "bookkeeping.write",
         "audit.read",
       ]),

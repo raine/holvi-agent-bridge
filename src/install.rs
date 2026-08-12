@@ -18,6 +18,8 @@ use crate::config::{
     validate_uuid,
 };
 use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_regular_file, is_socket};
+#[cfg(test)]
+use crate::protocol::DEFAULT_MAX_DOWNLOAD_BYTES;
 use crate::protocol::{Action, EmptyParams, sign_request};
 use crate::receipt_sandbox::resolve_receipt_root;
 
@@ -42,6 +44,8 @@ pub struct InstallOptions {
     pub payment_account_uuid: String,
     pub capabilities: Vec<String>,
     pub receipt_roots: Vec<PathBuf>,
+    pub export_roots: Vec<PathBuf>,
+    pub max_download_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -122,6 +126,24 @@ fn install_bridge_with_layout(
             .map(|root| resolve_receipt_root(root))
             .collect::<Result<Vec<_>>>()?,
     );
+    let export_roots = unique(
+        options
+            .export_roots
+            .iter()
+            .map(|root| crate::filesystem::resolve_export_root(root))
+            .collect::<Result<Vec<_>>>()?,
+    );
+    ensure!(
+        !capabilities
+            .iter()
+            .any(|value| matches!(value.as_str(), "reports.read" | "attachments.read"))
+            || !export_roots.is_empty(),
+        "Download capabilities require at least one --export-root."
+    );
+    ensure!(
+        options.max_download_bytes > 0,
+        "--max-download-bytes must be positive."
+    );
 
     let support_directory = config_path
         .parent()
@@ -139,7 +161,9 @@ fn install_bridge_with_layout(
         payment_account_uuid: options.payment_account_uuid,
         capabilities,
         receipt_roots,
+        export_roots,
         max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+        max_download_bytes: options.max_download_bytes,
         hmac_secret: reusable_secret(&config_path).unwrap_or_else(random_secret),
     };
     let config_bytes = serde_json::to_vec_pretty(&config)?;
@@ -525,6 +549,8 @@ mod tests {
                 payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
                 capabilities: vec!["transactions.read".into(), "attachments.write".into()],
                 receipt_roots: vec![receipt_root.canonicalize().unwrap()],
+                export_roots: vec![],
+                max_download_bytes: DEFAULT_MAX_DOWNLOAD_BYTES,
             },
             config_path.clone(),
             extension_path.clone(),
@@ -654,6 +680,8 @@ mod tests {
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
             capabilities: vec!["transactions.read".into(), "attachments.write".into()],
             receipt_roots: vec![receipt_root.canonicalize().unwrap()],
+            export_roots: vec![],
+            max_download_bytes: DEFAULT_MAX_DOWNLOAD_BYTES,
         };
 
         install_bridge_with_layout(

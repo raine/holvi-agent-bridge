@@ -695,12 +695,7 @@ export function projectBookkeepingDebt(
   if (items.length > maxBookkeepingItems) {
     throw new Error("Holvi bookkeeping debt exceeded its item limit.");
   }
-  const attachments = boundedArray(
-    debt.attachments,
-    "Bookkeeping debt attachments",
-    maxDebtAttachments,
-    true,
-  );
+  const attachments = debtAttachments(debt.attachments, "Bookkeeping debt");
   const responseUuid = uuid(debt.uuid, "Bookkeeping debt UUID");
   const requestedUuid = uuid(debtUuid, "Debt UUID");
   if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
@@ -749,6 +744,7 @@ export function projectBookkeepingDebt(
       "Bookkeeping connection",
     ),
     attachmentCount: attachments.length,
+    attachments,
     droppedItemCount: items.length - retained.length,
     items: retained.map(bookkeepingItem),
   });
@@ -838,6 +834,117 @@ function auditEntry(value: unknown): JsonRecord {
         : null,
     status: optionalString(data.status, "Activity status"),
   };
+}
+
+export function projectAccounts(value: unknown): JsonRecord {
+  const pool = record(value, "Pool");
+  const accounts = boundedArray(pool.paymentaccounts, "Payment accounts", 100);
+  const seen = new Set<string>();
+  const results = accounts.map((entry) => {
+    const account = record(entry, "Payment account");
+    const paymentAccountUuid = uuid(account.uuid, "Payment account UUID");
+    if (seen.has(paymentAccountUuid.toLowerCase()))
+      throw new Error("Holvi returned duplicate payment accounts.");
+    seen.add(paymentAccountUuid.toLowerCase());
+    return {
+      paymentAccountUuid,
+      name: optionalString(account.name, "Payment account name"),
+      iban: optionalString(account.iban, "Payment account IBAN"),
+      currency: optionalString(account.currency, "Payment account currency"),
+      state: optionalString(
+        account.state ?? account.status,
+        "Payment account state",
+      ),
+    };
+  });
+  return projection({ count: results.length, results });
+}
+
+export function projectBookkeepingPage(value: unknown): {
+  results: JsonRecord[];
+  next: string;
+} {
+  const page = record(value, "Bookkeeping page");
+  const results = boundedArray(page.results, "Bookkeeping results", 100).map(
+    (entry) => {
+      const debt = record(entry, "Bookkeeping list debt");
+      return projectBookkeepingDebt(
+        debt,
+        uuid(debt.uuid, "Bookkeeping debt UUID"),
+      );
+    },
+  );
+  return projection({
+    results,
+    next: optionalString(page.next, "Bookkeeping next page") ?? "",
+  });
+}
+
+export function projectReportJobs(value: unknown): JsonRecord {
+  const page = record(value, "Report jobs");
+  const seen = new Set<string>();
+  const results = boundedArray(page.results, "Report job results", 100).map(
+    (entry) => {
+      const job = record(entry, "Report job");
+      const reportUuid = uuid(job.uuid, "Report UUID");
+      if (seen.has(reportUuid.toLowerCase()))
+        throw new Error("Holvi returned duplicate report jobs.");
+      seen.add(reportUuid.toLowerCase());
+      const reportType = boundedString(job.report_type, "Report type");
+      if (!["single_pdf", "zip_export"].includes(reportType))
+        throw new Error("Holvi returned an unsupported report type.");
+      const status = boundedString(job.status, "Report status");
+      if (!["initiated", "ready", "error"].includes(status))
+        throw new Error("Holvi returned an unsupported report status.");
+      return {
+        reportUuid,
+        reportType,
+        status,
+        fromDate: boundedString(job.from_date, "Report start date"),
+        toDate: boundedString(job.to_date, "Report end date"),
+        paymentAccountUuid: optionalUuid(
+          job.payment_account_uuid,
+          "Report payment account",
+        ),
+        createTime: timestamp(job.create_time, "Report creation time"),
+        availableUntil: job.available_until
+          ? timestamp(job.available_until, "Report availability")
+          : null,
+      };
+    },
+  );
+  return projection({ count: results.length, results });
+}
+
+export function projectAuditTypes(value: unknown): JsonRecord {
+  const source = Array.isArray(value)
+    ? value
+    : boundedArray(
+        record(value, "Activity types").results,
+        "Activity types",
+        200,
+      );
+  const results = source.map((entry) =>
+    typeof entry === "string"
+      ? boundedString(entry, "Activity type")
+      : boundedString(
+          record(entry, "Activity type").value ??
+            record(entry, "Activity type").code,
+          "Activity type",
+        ),
+  );
+  return projection({ count: results.length, results });
+}
+
+export function projectAuditTraversalPage(value: unknown): {
+  results: JsonRecord[];
+  next: string;
+} {
+  const page = record(value, "Activity page");
+  return projection({
+    results: boundedArray(page.results, "Activity results", 25).map(auditEntry),
+    next: optionalString(page.next, "Activity next page") ?? "",
+  });
 }
 
 export function projectAuditPage(value: unknown, limit: number): JsonRecord {

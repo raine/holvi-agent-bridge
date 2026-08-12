@@ -18,14 +18,18 @@ pub const HOST_NAME: &str = "app.holvi_agent_bridge";
 pub const ACCOUNT_ORIGIN: &str = "https://account.app.holvi.com";
 pub const MIN_FILE_BYTES: u64 = 1;
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
-pub const SUPPORTED_CAPABILITIES: [&str; 7] = [
+pub const SUPPORTED_CAPABILITIES: [&str; 11] = [
     "transactions.read",
     "attachments.write",
     "attachments.delete",
+    "attachments.read",
     "comments.write",
     "bookkeeping.read",
     "bookkeeping.write",
     "audit.read",
+    "reports.read",
+    "reports.generate",
+    "accounts.read",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -36,7 +40,9 @@ pub struct BridgeConfig {
     pub payment_account_uuid: String,
     pub capabilities: Vec<String>,
     pub receipt_roots: Vec<PathBuf>,
+    pub export_roots: Vec<PathBuf>,
     pub max_file_bytes: u64,
+    pub max_download_bytes: u64,
     pub hmac_secret: String,
 }
 
@@ -48,6 +54,7 @@ pub struct PublicBridgeConfig<'a> {
     payment_account_uuid: &'a str,
     capabilities: &'a [String],
     max_file_bytes: u64,
+    max_download_bytes: u64,
 }
 
 impl BridgeConfig {
@@ -92,6 +99,22 @@ impl BridgeConfig {
             "attachments.write requires an approved attachment folder."
         );
         ensure!(
+            self.export_roots.iter().all(|root| root.is_absolute()),
+            "Holvi Agent Bridge config has an invalid export folder."
+        );
+        ensure!(
+            !self
+                .capabilities
+                .iter()
+                .any(|value| matches!(value.as_str(), "reports.read" | "attachments.read"))
+                || !self.export_roots.is_empty(),
+            "Download capabilities require an approved export folder."
+        );
+        ensure!(
+            self.max_download_bytes > 0,
+            "Holvi Agent Bridge config has an invalid download-size limit."
+        );
+        ensure!(
             (MIN_FILE_BYTES..=DEFAULT_MAX_FILE_BYTES).contains(&self.max_file_bytes),
             "Holvi Agent Bridge config has an invalid file-size limit."
         );
@@ -105,6 +128,7 @@ impl BridgeConfig {
             payment_account_uuid: &self.payment_account_uuid,
             capabilities: &self.capabilities,
             max_file_bytes: self.max_file_bytes,
+            max_download_bytes: self.max_download_bytes,
         }
     }
 }
@@ -217,7 +241,9 @@ mod tests {
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
             capabilities: vec!["transactions.read".into(), "attachments.write".into()],
             receipt_roots: roots,
+            export_roots: vec![],
             max_file_bytes: 1024 * 1024,
+            max_download_bytes: crate::protocol::DEFAULT_MAX_DOWNLOAD_BYTES,
             hmac_secret: "b".repeat(64),
         }
     }

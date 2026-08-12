@@ -86,7 +86,9 @@ mod tests {
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
             capabilities: vec!["transactions.read".into(), "attachments.write".into()],
             receipt_roots: vec![approved],
+            export_roots: vec![],
             max_file_bytes: original.len() as u64,
+            max_download_bytes: 1024 * 1024,
             hmac_secret: "a".repeat(64),
         };
         let (sender, mut receiver) = mpsc::channel(1);

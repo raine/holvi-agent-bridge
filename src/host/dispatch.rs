@@ -47,15 +47,21 @@ pub async fn send(
         Action::AttachmentUpload(params) => {
             receipt::transfer(&request.id, params, &config, &native).await
         }
-        action => native
-            .send(json!({
-                "type": COMMAND_MESSAGE,
-                "id": request.id,
-                "action": action.name(),
-                "params": action.params(),
-            }))
-            .await
-            .context("Chrome native output closed."),
+        action => {
+            let mut params = action.params();
+            if let Some(object) = params.as_object_mut() {
+                object.remove("outputDirectory");
+            }
+            native
+                .send(json!({
+                    "type": COMMAND_MESSAGE,
+                    "id": request.id,
+                    "action": action.name(),
+                    "params": params,
+                }))
+                .await
+                .context("Chrome native output closed.")
+        }
     }
 }
 
@@ -77,7 +83,14 @@ mod tests {
             debt_uuid: "11111111-1111-4111-8111-111111111111".into(),
         }));
         assert!(validate(&request, &config, true, false).is_ok());
-        request.action = Action::AuditList(AuditListParams { limit: 1 });
+        request.action = Action::AuditList(AuditListParams {
+            from: "2020-01-01".into(),
+            to: "2030-01-01".into(),
+            type_class: None,
+            query: None,
+            limit: 1,
+            max_pages: 1,
+        });
         assert!(validate(&request, &config, true, false).is_err());
         config.capabilities = vec!["audit.read".into()];
         assert!(validate(&request, &config, true, false).is_ok());
@@ -202,7 +215,9 @@ mod tests {
             payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
             capabilities,
             receipt_roots: vec![PathBuf::from("/tmp")],
+            export_roots: vec![],
             max_file_bytes: 1024,
+            max_download_bytes: 1024 * 1024,
             hmac_secret: "a".repeat(64),
         }
     }

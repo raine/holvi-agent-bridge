@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, bail, ensure};
@@ -13,15 +13,18 @@ use sha2::Sha256;
 use crate::config::{is_lower_hex, validate_uuid};
 
 pub const SIGNED_REQUEST_VERSION: u8 = 1;
-pub const NATIVE_PROTOCOL_VERSION: u8 = 1;
+pub const NATIVE_PROTOCOL_VERSION: u8 = 2;
 pub const HOST_BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_NATIVE_INPUT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_NATIVE_OUTPUT_BYTES: usize = 1024 * 1024;
 pub const MAX_SOCKET_REQUEST_BYTES: usize = 128 * 1024;
 pub const MAX_SOCKET_RESPONSE_BYTES: usize = MAX_NATIVE_INPUT_BYTES;
 pub const REQUEST_MAX_AGE_MS: u64 = 30_000;
-pub const AUDIT_LIMIT_MIN: u8 = 1;
-pub const AUDIT_LIMIT_MAX: u8 = 25;
+pub const AUDIT_LIMIT_MIN: u16 = 1;
+pub const AUDIT_LIMIT_MAX: u16 = 5000;
+pub const MAX_PAGES: u16 = 200;
+pub const DOWNLOAD_CHUNK_BYTES: usize = 491_520;
+pub const DEFAULT_MAX_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 pub const BOOKKEEPING_DESCRIPTION_MAX_BYTES: usize = 4096;
 pub const MAX_COMMENT_CONTENT_BYTES: usize = 16 * 1024;
 pub const HOST_READY_MESSAGE: &str = "host_ready";
@@ -33,6 +36,9 @@ pub const UPLOAD_END_MESSAGE: &str = "upload_end";
 pub const TAB_READY_MESSAGE: &str = "tab_ready";
 pub const TAB_UNAVAILABLE_MESSAGE: &str = "tab_unavailable";
 pub const HOST_REJECTED_MESSAGE: &str = "host_rejected";
+pub const DOWNLOAD_START_MESSAGE: &str = "download_start";
+pub const DOWNLOAD_CHUNK_MESSAGE: &str = "download_chunk";
+pub const DOWNLOAD_END_MESSAGE: &str = "download_end";
 pub const RESULT_MESSAGE: &str = "result";
 #[cfg(test)]
 pub const HOST_TO_EXTENSION_MESSAGES: [&str; 6] = [
@@ -44,10 +50,13 @@ pub const HOST_TO_EXTENSION_MESSAGES: [&str; 6] = [
     UPLOAD_END_MESSAGE,
 ];
 #[cfg(test)]
-pub const EXTENSION_TO_HOST_MESSAGES: [&str; 4] = [
+pub const EXTENSION_TO_HOST_MESSAGES: [&str; 7] = [
     TAB_READY_MESSAGE,
     TAB_UNAVAILABLE_MESSAGE,
     HOST_REJECTED_MESSAGE,
+    DOWNLOAD_START_MESSAGE,
+    DOWNLOAD_CHUNK_MESSAGE,
+    DOWNLOAD_END_MESSAGE,
     RESULT_MESSAGE,
 ];
 
@@ -148,9 +157,77 @@ pub struct AttachmentDeleteParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentDownloadParams {
+    pub debt_uuid: String,
+    pub attachment_code: String,
+    pub output_directory: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportExportParams {
+    pub report_type: String,
+    pub from: String,
+    pub to: String,
+    pub format: String,
+    pub payment_account_uuid: Option<String>,
+    pub output_directory: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportJobListParams {
+    pub report_type: String,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportJobParams {
+    pub report_uuid: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportJobDownloadParams {
+    pub report_uuid: String,
+    pub output_directory: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportJobCreateParams {
+    pub report_type: String,
+    pub from: String,
+    pub to: String,
+    pub payment_account_uuid: Option<String>,
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BookkeepingListParams {
+    pub from: String,
+    pub to: String,
+    pub bookkeeping_status: Option<String>,
+    pub payment_account_uuid: Option<String>,
+    pub uncategorised: bool,
+    pub no_vat: bool,
+    pub no_attachment: bool,
+    pub external_transactions: bool,
+    pub max_pages: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditListParams {
-    pub limit: u8,
+    pub from: String,
+    pub to: String,
+    pub type_class: Option<String>,
+    pub query: Option<String>,
+    pub limit: u16,
+    pub max_pages: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,14 +241,33 @@ pub enum Action {
     CommentsCreate(CommentCreateParams),
     AttachmentUpload(UploadParams),
     AttachmentDelete(AttachmentDeleteParams),
+    AttachmentDownload(AttachmentDownloadParams),
+    AccountsList(EmptyParams),
+    ReportsTypes(EmptyParams),
+    ReportsExport(ReportExportParams),
+    ReportJobsList(ReportJobListParams),
+    ReportJobsGet(ReportJobParams),
+    ReportJobsCreate(ReportJobCreateParams),
+    ReportJobsDownload(ReportJobDownloadParams),
+    BookkeepingList(BookkeepingListParams),
     BookkeepingGet(DebtParams),
     BookkeepingCategories(EmptyParams),
     BookkeepingSuggestions(DebtParams),
     BookkeepingSetDescription(BookkeepingDescriptionParams),
+    AuditTypes(EmptyParams),
     AuditList(AuditListParams),
 }
 
 impl Action {
+    pub fn download_output(&self) -> Option<&PathBuf> {
+        match self {
+            Self::AttachmentDownload(params) => Some(&params.output_directory),
+            Self::ReportsExport(params) => Some(&params.output_directory),
+            Self::ReportJobsDownload(params) => Some(&params.output_directory),
+            _ => None,
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::HostRestart(_) => "host.restart",
@@ -183,10 +279,20 @@ impl Action {
             Self::CommentsCreate(_) => "comments.create",
             Self::AttachmentUpload(_) => "attachments.upload",
             Self::AttachmentDelete(_) => "attachments.delete",
+            Self::AttachmentDownload(_) => "attachments.download",
+            Self::AccountsList(_) => "accounts.list",
+            Self::ReportsTypes(_) => "reports.types",
+            Self::ReportsExport(_) => "reports.export",
+            Self::ReportJobsList(_) => "reports.jobs.list",
+            Self::ReportJobsGet(_) => "reports.jobs.get",
+            Self::ReportJobsCreate(_) => "reports.jobs.create",
+            Self::ReportJobsDownload(_) => "reports.jobs.download",
+            Self::BookkeepingList(_) => "bookkeeping.list",
             Self::BookkeepingGet(_) => "bookkeeping.get",
             Self::BookkeepingCategories(_) => "bookkeeping.categories",
             Self::BookkeepingSuggestions(_) => "bookkeeping.suggestions",
             Self::BookkeepingSetDescription(_) => "bookkeeping.set-description",
+            Self::AuditTypes(_) => "audit.types",
             Self::AuditList(_) => "audit.list",
         }
     }
@@ -195,7 +301,10 @@ impl Action {
         match self {
             Self::HostRestart(params)
             | Self::Doctor(params)
-            | Self::BookkeepingCategories(params) => serde_json::to_value(params),
+            | Self::AccountsList(params)
+            | Self::ReportsTypes(params)
+            | Self::BookkeepingCategories(params)
+            | Self::AuditTypes(params) => serde_json::to_value(params),
             Self::TransactionsList(params) => serde_json::to_value(params),
             Self::TransactionsGet(params)
             | Self::DebtGet(params)
@@ -205,6 +314,13 @@ impl Action {
             Self::CommentsCreate(params) => serde_json::to_value(params),
             Self::AttachmentUpload(params) => serde_json::to_value(params),
             Self::AttachmentDelete(params) => serde_json::to_value(params),
+            Self::AttachmentDownload(params) => serde_json::to_value(params),
+            Self::ReportsExport(params) => serde_json::to_value(params),
+            Self::ReportJobsList(params) => serde_json::to_value(params),
+            Self::ReportJobsGet(params) => serde_json::to_value(params),
+            Self::ReportJobsCreate(params) => serde_json::to_value(params),
+            Self::ReportJobsDownload(params) => serde_json::to_value(params),
+            Self::BookkeepingList(params) => serde_json::to_value(params),
             Self::BookkeepingSetDescription(params) => serde_json::to_value(params),
             Self::AuditList(params) => serde_json::to_value(params),
         }
@@ -262,6 +378,83 @@ impl Action {
                 validate_attachment_code(&params.attachment_code)?;
                 Self::AttachmentDelete(params)
             }
+            "attachments.download" => {
+                let params: AttachmentDownloadParams = decode(params)?;
+                validate_uuid(&params.debt_uuid, "Debt")?;
+                validate_attachment_code(&params.attachment_code)?;
+                validate_output_directory(&params.output_directory)?;
+                Self::AttachmentDownload(params)
+            }
+            "accounts.list" => Self::AccountsList(decode(params)?),
+            "reports.types" => Self::ReportsTypes(decode(params)?),
+            "reports.export" => {
+                let params: ReportExportParams = decode(params)?;
+                validate_report_range(&params.from, &params.to)?;
+                validate_direct_report(
+                    &params.report_type,
+                    &params.format,
+                    params.payment_account_uuid.as_deref(),
+                )?;
+                if params.report_type == "account-statement" && params.format == "pdf" {
+                    validate_twelve_month_range(&params.from, &params.to)?;
+                }
+                validate_output_directory(&params.output_directory)?;
+                Self::ReportsExport(params)
+            }
+            "reports.jobs.list" => {
+                let params: ReportJobListParams = decode(params)?;
+                validate_async_report(&params.report_type)?;
+                if let Some(status) = &params.status {
+                    ensure!(
+                        ["initiated", "ready", "error"].contains(&status.as_str()),
+                        "Unsupported report status."
+                    );
+                }
+                Self::ReportJobsList(params)
+            }
+            "reports.jobs.get" => {
+                let params: ReportJobParams = decode(params)?;
+                validate_uuid(&params.report_uuid, "Report")?;
+                Self::ReportJobsGet(params)
+            }
+            "reports.jobs.create" => {
+                let params: ReportJobCreateParams = decode(params)?;
+                validate_async_report(&params.report_type)?;
+                validate_report_range(&params.from, &params.to)?;
+                ensure!(
+                    params.confirmed,
+                    "Report generation requires explicit confirmation."
+                );
+                if params.report_type == "all-in-one-pdf" {
+                    ensure!(
+                        params.payment_account_uuid.is_some(),
+                        "This report requires a payment account."
+                    );
+                    validate_twelve_month_range(&params.from, &params.to)?;
+                }
+                if let Some(account) = &params.payment_account_uuid {
+                    validate_uuid(account, "Payment account")?;
+                }
+                Self::ReportJobsCreate(params)
+            }
+            "reports.jobs.download" => {
+                let params: ReportJobDownloadParams = decode(params)?;
+                validate_uuid(&params.report_uuid, "Report")?;
+                validate_output_directory(&params.output_directory)?;
+                Self::ReportJobsDownload(params)
+            }
+            "bookkeeping.list" => {
+                let params: BookkeepingListParams = decode(params)?;
+                validate_report_range(&params.from, &params.to)?;
+                ensure!(
+                    (1..=MAX_PAGES).contains(&params.max_pages),
+                    "Bookkeeping max pages must be between 1 and 200."
+                );
+                if let Some(account) = &params.payment_account_uuid {
+                    validate_uuid(account, "Payment account")?;
+                }
+                Self::BookkeepingList(params)
+            }
             "bookkeeping.get" => Self::BookkeepingGet(validated_debt_params(decode(params)?)?),
             "bookkeeping.categories" => Self::BookkeepingCategories(decode(params)?),
             "bookkeeping.suggestions" => {
@@ -277,11 +470,21 @@ impl Action {
                 );
                 Self::BookkeepingSetDescription(params)
             }
+            "audit.types" => Self::AuditTypes(decode(params)?),
             "audit.list" => {
                 let params: AuditListParams = decode(params)?;
+                validate_report_range(&params.from, &params.to)?;
                 ensure!(
                     (AUDIT_LIMIT_MIN..=AUDIT_LIMIT_MAX).contains(&params.limit),
-                    "Activity limit must be between 1 and 25."
+                    "Activity limit must be between 1 and 5000."
+                );
+                ensure!(
+                    (1..=MAX_PAGES).contains(&params.max_pages),
+                    "Activity max pages must be between 1 and 200."
+                );
+                ensure!(
+                    params.query.as_ref().is_none_or(|value| value.len() <= 256),
+                    "Activity query must be at most 256 bytes."
                 );
                 Self::AuditList(params)
             }
@@ -289,6 +492,66 @@ impl Action {
         };
         Ok(action)
     }
+}
+
+fn validate_output_directory(path: &Path) -> Result<()> {
+    ensure!(
+        path.is_absolute(),
+        "Export output directory must be absolute."
+    );
+    Ok(())
+}
+
+fn validate_report_range(from: &str, to: &str) -> Result<()> {
+    ensure!(
+        !from.is_empty() && !to.is_empty(),
+        "Report dates are required."
+    );
+    validate_date(from)?;
+    validate_date(to)?;
+    ensure!(from <= to, "Start date must be on or before end date.");
+    Ok(())
+}
+
+fn validate_twelve_month_range(from: &str, to: &str) -> Result<()> {
+    let start = NaiveDate::parse_from_str(from, "%Y-%m-%d")?;
+    let end = NaiveDate::parse_from_str(to, "%Y-%m-%d")?;
+    let maximum = start
+        .checked_add_months(chrono::Months::new(12))
+        .ok_or_else(|| anyhow::anyhow!("Report range overflowed."))?;
+    ensure!(
+        end <= maximum,
+        "This report supports at most a 12-month range."
+    );
+    Ok(())
+}
+
+fn validate_async_report(report_type: &str) -> Result<()> {
+    ensure!(
+        ["all-in-one-pdf", "all-in-one-zip"].contains(&report_type),
+        "Unsupported asynchronous report type."
+    );
+    Ok(())
+}
+
+fn validate_direct_report(report_type: &str, format: &str, account: Option<&str>) -> Result<()> {
+    let formats: &[&str] = match report_type {
+        "account-statement" => &["pdf", "xls"],
+        "journal" | "ledger" | "invoicing" => &["xls"],
+        "camt052" => &["xml"],
+        _ => bail!("Unsupported direct report type."),
+    };
+    ensure!(
+        formats.contains(&format),
+        "Unsupported format for report type."
+    );
+    if ["account-statement", "camt052"].contains(&report_type) {
+        ensure!(account.is_some(), "This report requires a payment account.");
+    }
+    if let Some(value) = account {
+        validate_uuid(value, "Payment account")?;
+    }
+    Ok(())
 }
 
 fn validated_debt_params(params: DebtParams) -> Result<DebtParams> {
@@ -325,7 +588,7 @@ fn validate_date(value: &str) -> Result<()> {
             && value.as_bytes().get(4) == Some(&b'-')
             && value.as_bytes().get(7) == Some(&b'-')
             && NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok(),
-        "Transaction dates must use YYYY-MM-DD calendar dates."
+        "Dates must use YYYY-MM-DD calendar dates."
     );
     Ok(())
 }
@@ -665,6 +928,60 @@ mod tests {
                     "confirmed": "yes"
                 }),
             ),
+            (
+                "attachments.download",
+                json!({
+                    "debtUuid": "11111111-1111-4111-8111-111111111111",
+                    "attachmentCode": "ATTACHMENT-1",
+                    "outputDirectory": "relative"
+                }),
+            ),
+            (
+                "reports.export",
+                json!({
+                    "reportType": "journal",
+                    "from": "2026-01-01",
+                    "to": "2026-01-31",
+                    "format": "pdf",
+                    "paymentAccountUuid": null,
+                    "outputDirectory": "/tmp"
+                }),
+            ),
+            (
+                "reports.jobs.create",
+                json!({
+                    "reportType": "all-in-one-zip",
+                    "from": "2026-01-01",
+                    "to": "2026-01-31",
+                    "paymentAccountUuid": null,
+                    "confirmed": false
+                }),
+            ),
+            (
+                "bookkeeping.list",
+                json!({
+                    "from": "2026-01-01",
+                    "to": "2026-01-31",
+                    "bookkeepingStatus": null,
+                    "paymentAccountUuid": null,
+                    "uncategorised": false,
+                    "noVat": false,
+                    "noAttachment": false,
+                    "externalTransactions": false,
+                    "maxPages": 0
+                }),
+            ),
+            (
+                "audit.list",
+                json!({
+                    "from": "2026-01-01",
+                    "to": "2026-01-31",
+                    "typeClass": null,
+                    "query": null,
+                    "limit": 5001,
+                    "maxPages": 1
+                }),
+            ),
             ("bookkeeping.get", json!({"debtUuid": ""})),
             ("bookkeeping.categories", json!({"limit": 1})),
             ("bookkeeping.suggestions", json!({})),
@@ -698,6 +1015,13 @@ mod tests {
                 "accepted malformed parameters for {action}"
             );
         }
+    }
+
+    #[test]
+    fn enforces_source_confirmed_report_range_limits() {
+        assert!(validate_twelve_month_range("2026-01-01", "2027-01-01").is_ok());
+        assert!(validate_twelve_month_range("2026-01-01", "2027-01-02").is_err());
+        assert!(validate_twelve_month_range("2024-02-29", "2025-02-28").is_ok());
     }
 
     #[test]

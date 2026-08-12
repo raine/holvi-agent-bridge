@@ -494,6 +494,134 @@ describe("Holvi API boundary", () => {
     );
   });
 
+  test("creates report jobs through the exact reporting endpoint and pool", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const api = new HolviApi(staticConfig, session, async (input, init) => {
+      requests.push({ url: requestUrl(input), init });
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      api.createReportJob(auth, {
+        reportType: "all-in-one-zip",
+        from: "2026-01-01",
+        to: "2026-01-31",
+        confirmed: false,
+      }),
+    ).rejects.toThrow("explicit confirmation");
+    expect(requests).toHaveLength(0);
+
+    await expect(
+      api.createReportJob(auth, {
+        reportType: "all-in-one-zip",
+        from: "2026-01-01",
+        to: "2026-01-31",
+        confirmed: true,
+      }),
+    ).resolves.toEqual({ accepted: true });
+    expect(requests[0]!.url).toBe("https://holvi.com/api/reporting/reports/");
+    expect(requests[0]!.init?.method).toBe("POST");
+    const body = requests[0]!.init?.body;
+    expect(typeof body).toBe("string");
+    expect(JSON.parse(body as string)).toEqual({
+      from_date: "2026-01-01",
+      to_date: "2026-01-31",
+      report_type: "zip_export",
+      pool: "example",
+    });
+    const headers = requests[0]!.init?.headers as Headers;
+    expect(headers.get("Authorization")).toBe(`Bearer ${auth.token}`);
+  });
+
+  test("proves ready report ownership and omits credentials from storage", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const reportUuid = "44444444-4444-4444-8444-444444444444";
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const job = (reportType: string) => ({
+      uuid: reportUuid,
+      report_type: reportType,
+      status: "ready",
+      from_date: "2026-01-01",
+      to_date: "2026-01-31",
+      payment_account_uuid: null,
+      create_time: "2026-08-12T12:00:00Z",
+      available_until: "2026-08-19T12:00:00Z",
+    });
+    const api = new HolviApi(staticConfig, session, async (input, init) => {
+      const url = requestUrl(input);
+      requests.push({ url, init });
+      if (url.includes("report_type=single_pdf"))
+        return jsonResponse({ results: [] });
+      if (url.includes("report_type=zip_export"))
+        return jsonResponse({ results: [job("zip_export")] });
+      if (url.endsWith(`/${reportUuid}/download/`))
+        return jsonResponse({
+          link: "https://storage.holvi.com/media/report.zip?signature=secret",
+        });
+      const response = new Response("zip", {
+        headers: {
+          "content-type": "application/zip",
+          "content-length": "3",
+        },
+      });
+      Object.defineProperty(response, "url", {
+        value: "https://storage.holvi.com/media/report.zip?signature=secret",
+      });
+      return response;
+    });
+
+    const download = await api.downloadResponse(auth, "reports.jobs.download", {
+      reportUuid,
+    });
+    expect(download.metadata).toEqual({ reportUuid, reportType: "zip_export" });
+    const storage = requests.find((request) =>
+      request.url.startsWith("https://storage.holvi.com/"),
+    );
+    expect(storage?.init?.credentials).toBe("omit");
+    expect(
+      new Headers(storage?.init?.headers).has("Authorization"),
+    ).toBeFalse();
+    expect(
+      requests.filter((request) =>
+        request.url.includes("/api/reporting/reports/?"),
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("rejects signed download links outside Holvi storage", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const reportUuid = "44444444-4444-4444-8444-444444444444";
+    const api = new HolviApi(staticConfig, session, async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("report_type=single_pdf"))
+        return jsonResponse({ results: [] });
+      if (url.includes("report_type=zip_export"))
+        return jsonResponse({
+          results: [
+            {
+              uuid: reportUuid,
+              report_type: "zip_export",
+              status: "ready",
+              from_date: "2026-01-01",
+              to_date: "2026-01-31",
+              payment_account_uuid: null,
+              create_time: "2026-08-12T12:00:00Z",
+              available_until: null,
+            },
+          ],
+        });
+      return jsonResponse({ link: "https://example.com/media/report.zip" });
+    });
+
+    await expect(
+      api.downloadResponse(auth, "reports.jobs.download", { reportUuid }),
+    ).rejects.toThrow("invalid download link");
+  });
+
   test("bounds and validates API response bodies", async () => {
     const session = new BridgeSession(staticConfig);
     session.configure(runtimeConfig);

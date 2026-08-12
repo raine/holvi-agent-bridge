@@ -31,7 +31,15 @@ for Holvi work. Authentication stays inside Chrome.
   for the configured Holvi pool.
 - `bookkeeping.write` permits dry runs and confirmed replacement of one active
   line-item description. It does not grant bookkeeping read commands.
-- `audit.read` permits one bounded recent-activity read for the configured pool.
+- `audit.read` permits bounded historical activity traversal and activity type
+  discovery for the configured pool.
+- `accounts.read` permits payment-account discovery for the configured pool.
+- `reports.read` permits report type and job reads plus direct and ready-job
+  downloads into approved export roots.
+- `reports.generate` permits asynchronous report creation only after a dry run
+  and explicit `--yes` confirmation.
+- `attachments.read` combines with `bookkeeping.read` to download an attachment
+  after proving that its code belongs to the requested debt.
 - A command fails closed when its capability is absent. Do not work around a
   missing capability through browser automation, direct API calls, or another
   credential path.
@@ -68,10 +76,14 @@ holvi transactions list --from 2026-07-01 --to 2026-07-31 --json
 holvi transactions list --missing-attachments --json
 holvi transactions get --debt "$PAYMENT_PAGE_URL"
 holvi transactions comments list --debt "$PAYMENT_PAGE_URL"
+holvi bookkeeping list --from 2022-01-01 --to 2026-12-31 --json
 holvi bookkeeping get --debt "$PAYMENT_PAGE_URL"
 holvi bookkeeping categories
 holvi bookkeeping suggestions --debt "$PAYMENT_PAGE_URL"
-holvi audit list --limit 25
+holvi audit types --json
+holvi audit list --from 2022-01-01 --to 2026-12-31 --json
+holvi accounts list --json
+holvi reports types --json
 ```
 
 - Prefer `transactions list --json` when matching records or passing identifiers

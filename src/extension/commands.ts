@@ -64,6 +64,15 @@ export class CommandService {
         this.comments.createComment(auth, params),
       "attachments.delete": (auth, params) =>
         this.attachmentDeletion.deleteAttachment(auth, params),
+      "accounts.list": (auth) => this.api.accounts(auth),
+      "reports.types": () => Promise.resolve(this.api.reportTypeCatalog()),
+      "reports.jobs.list": (auth, params) => this.api.reportJobs(auth, params),
+      "reports.jobs.get": (auth, params) =>
+        this.api.reportJob(auth, asString(params.reportUuid)),
+      "reports.jobs.create": (auth, params) =>
+        this.api.createReportJob(auth, params),
+      "bookkeeping.list": (auth, params) =>
+        this.api.listBookkeeping(auth, params),
       "bookkeeping.get": (auth, params) =>
         this.api.bookkeepingDebt(auth, asString(params.debtUuid)),
       "bookkeeping.categories": (auth) => this.api.bookkeepingCategories(auth),
@@ -76,7 +85,8 @@ export class CommandService {
           description: requiredString(params.description),
           confirmed: asBoolean(params.confirmed),
         }),
-      "audit.list": (auth, params) => this.api.recentAudit(auth, params.limit),
+      "audit.types": (auth) => this.api.auditTypes(auth),
+      "audit.list": (auth, params) => this.api.historicalAudit(auth, params),
     };
   }
 
@@ -90,8 +100,13 @@ export class CommandService {
       throw new Error("The local helper requested an unsupported action.");
     }
     this.session.requireCapabilities(...requirements);
-    if (action === "attachments.upload") {
-      throw new Error("Receipt uploads require transfer messages.");
+    if (
+      action === "attachments.upload" ||
+      action === "attachments.download" ||
+      action === "reports.export" ||
+      action === "reports.jobs.download"
+    ) {
+      throw new Error("This action requires transfer messages.");
     }
     const auth = await this.requestAuth();
     return this.handlers[action](auth, message.params || {});

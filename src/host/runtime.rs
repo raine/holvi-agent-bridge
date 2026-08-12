@@ -8,12 +8,14 @@ use tokio::task::{AbortHandle, JoinError, JoinHandle, JoinSet};
 use tokio::time::Instant;
 
 use super::dispatch;
+use super::download::DownloadReceiver;
 use super::native_messaging;
 use super::socket::LocalSocket;
 use super::{LocalRequest, SocketReply};
 use crate::config::BridgeConfig;
 use crate::protocol::{
-    Action, HOST_BUILD_VERSION, HOST_READY_MESSAGE, HOST_REJECTED_MESSAGE, HOST_RESTART_MESSAGE,
+    Action, DOWNLOAD_CHUNK_MESSAGE, DOWNLOAD_END_MESSAGE, DOWNLOAD_START_MESSAGE,
+    HOST_BUILD_VERSION, HOST_READY_MESSAGE, HOST_REJECTED_MESSAGE, HOST_RESTART_MESSAGE,
     NATIVE_PROTOCOL_VERSION, RESULT_MESSAGE, TAB_READY_MESSAGE, TAB_UNAVAILABLE_MESSAGE,
 };
 
@@ -27,6 +29,7 @@ struct ActiveRequest {
     reply: SocketReply,
     deadline: Instant,
     task: AbortHandle,
+    download: Option<DownloadReceiver>,
 }
 
 #[derive(Default)]
@@ -37,12 +40,24 @@ struct RuntimeState {
 }
 
 impl RuntimeState {
-    fn start(&mut self, incoming: LocalRequest, task: AbortHandle, now: Instant) {
+    fn start(
+        &mut self,
+        incoming: LocalRequest,
+        task: AbortHandle,
+        now: Instant,
+        download: Option<DownloadReceiver>,
+    ) {
         self.active = Some(ActiveRequest {
             id: incoming.request.id,
             reply: incoming.reply,
-            deadline: now + REQUEST_TIMEOUT,
+            deadline: now
+                + if download.is_some() {
+                    Duration::from_secs(600)
+                } else {
+                    REQUEST_TIMEOUT
+                },
             task,
+            download,
         });
     }
 
@@ -68,6 +83,27 @@ impl RuntimeState {
                         .to_owned(),
                 );
             }
+            Some(DOWNLOAD_START_MESSAGE | DOWNLOAD_CHUNK_MESSAGE | DOWNLOAD_END_MESSAGE) => {
+                let Some(id) = message.get("id").and_then(Value::as_str) else {
+                    return;
+                };
+                let Some(active) = self.active.as_mut().filter(|active| active.id == id) else {
+                    return;
+                };
+                let Some(download) = active.download.as_mut() else {
+                    self.finish(json!({"ok": false, "error": "Unexpected download transfer."}));
+                    return;
+                };
+                let result = match message.get("type").and_then(Value::as_str) {
+                    Some(DOWNLOAD_START_MESSAGE) => download.start(&message),
+                    Some(DOWNLOAD_CHUNK_MESSAGE) => download.chunk(&message),
+                    Some(DOWNLOAD_END_MESSAGE) => download.end(&message),
+                    _ => unreachable!(),
+                };
+                if let Err(error) = result {
+                    self.finish(json!({"ok": false, "error": error.to_string()}));
+                }
+            }
             Some(RESULT_MESSAGE) => {
                 let Some(id) = message.get("id").and_then(Value::as_str) else {
                     return;
@@ -76,7 +112,26 @@ impl RuntimeState {
                     return;
                 }
                 let response = if message.get("ok") == Some(&Value::Bool(true)) {
-                    json!({"ok": true, "data": message.get("data").cloned().unwrap_or(Value::Null)})
+                    let active = self.active.as_mut().expect("matching active request");
+                    if let Some(download) = active.download.as_mut() {
+                        if !download.is_complete() {
+                            json!({"ok": false, "error": "Download result arrived before transfer completion."})
+                        } else {
+                            let mut data =
+                                message.get("data").cloned().unwrap_or_else(|| json!({}));
+                            if let (Some(target), Some(metadata)) = (
+                                data.as_object_mut(),
+                                download
+                                    .take_completed()
+                                    .and_then(|value| value.as_object().cloned()),
+                            ) {
+                                target.extend(metadata);
+                            }
+                            json!({"ok": true, "data": data})
+                        }
+                    } else {
+                        json!({"ok": true, "data": message.get("data").cloned().unwrap_or(Value::Null)})
+                    }
                 } else {
                     let error = message
                         .get("error")
@@ -336,6 +391,22 @@ impl HostRuntime {
             return;
         }
 
+        let download = match incoming.request.action.download_output() {
+            Some(output) => match DownloadReceiver::prepare(
+                output,
+                &self.config.export_roots,
+                self.config.max_download_bytes,
+            ) {
+                Ok(receiver) => Some(receiver),
+                Err(error) => {
+                    let _ = incoming
+                        .reply
+                        .send(json!({"ok": false, "error": error.to_string()}));
+                    return;
+                }
+            },
+            None => None,
+        };
         let request = incoming.request.clone();
         let id = request.id.clone();
         let config = self.config.clone();
@@ -344,7 +415,7 @@ impl HostRuntime {
             let result = dispatch::send(request, config, native).await;
             ActionOutcome { id, result }
         });
-        self.state.start(incoming, task, Instant::now());
+        self.state.start(incoming, task, Instant::now(), download);
     }
 }
 
@@ -425,7 +496,7 @@ mod tests {
         let task = tasks.spawn(pending::<()>());
         let now = Instant::now();
         let mut state = RuntimeState::default();
-        state.start(test_local(reply), task, now);
+        state.start(test_local(reply), task, now, None);
 
         assert!(!state.deadline_expired(now + REQUEST_TIMEOUT - Duration::from_millis(1)));
         assert!(state.deadline_expired(now + REQUEST_TIMEOUT));
@@ -453,7 +524,7 @@ mod tests {
         let mut tasks = JoinSet::new();
         let task = tasks.spawn(pending::<()>());
         let mut state = RuntimeState::default();
-        state.start(test_local(reply), task, Instant::now());
+        state.start(test_local(reply), task, Instant::now(), None);
         (state, response)
     }
 

@@ -1,5 +1,7 @@
 import type { NativeMessage, StaticBridgeConfig } from "./background-types.js";
 import { CommandService } from "./commands.js";
+import { HolviApi } from "./holvi-api.js";
+import { requiredCapabilities } from "./policy.js";
 import { BridgeSession } from "./session.js";
 import { TabRegistry } from "./tab-registry.js";
 import {
@@ -22,6 +24,9 @@ const nativeMessageType = Object.freeze({
   tabReady: "tab_ready",
   tabUnavailable: "tab_unavailable",
   hostRejected: "host_rejected",
+  downloadStart: "download_start",
+  downloadChunk: "download_chunk",
+  downloadEnd: "download_end",
   result: "result",
 });
 export const nativeMessageTypes = Object.freeze({
@@ -37,6 +42,9 @@ export const nativeMessageTypes = Object.freeze({
     nativeMessageType.tabReady,
     nativeMessageType.tabUnavailable,
     nativeMessageType.hostRejected,
+    nativeMessageType.downloadStart,
+    nativeMessageType.downloadChunk,
+    nativeMessageType.downloadEnd,
     nativeMessageType.result,
   ],
 });
@@ -53,6 +61,7 @@ export class NativeBridge {
     private readonly tabs: TabRegistry,
     private readonly commands: CommandService,
     private readonly uploads: UploadWorkflow,
+    private readonly api?: HolviApi,
   ) {}
 
   connect(): void {
@@ -146,6 +155,81 @@ export class NativeBridge {
       .then((auth) => this.uploads.uploadReceipt(auth, upload));
   }
 
+  private async streamDownload(
+    id: string,
+    message: NativeMessage,
+  ): Promise<void> {
+    if (!this.api) throw new Error("Download service is unavailable.");
+    const action = message.action || "";
+    const requirements = requiredCapabilities(action);
+    if (!requirements)
+      throw new Error("The local helper requested an unsupported action.");
+    this.session.requireCapabilities(...requirements);
+    const auth = await this.tabs.requestAuth();
+    const { response, fileName, metadata } = await this.api.downloadResponse(
+      auth,
+      action,
+      message.params || {},
+    );
+    if (!response.body) throw new Error("Holvi download returned no body.");
+    const mimeType =
+      response.headers.get("content-type")?.split(";", 1)[0]?.trim() ||
+      "application/octet-stream";
+    const declared = response.headers.get("content-length");
+    const expectedSize =
+      declared && /^\d+$/.test(declared) ? Number(declared) : undefined;
+    this.postNative({
+      type: nativeMessageType.downloadStart,
+      id,
+      fileName,
+      mimeType,
+      expectedSize,
+      chunkSize: 491520,
+    });
+    const reader = response.body.getReader();
+    let pending = new Uint8Array(0);
+    let index = 0;
+    let size = 0;
+    const send = (bytes: Uint8Array) => {
+      let binary = "";
+      for (let offset = 0; offset < bytes.length; offset += 8192)
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+      this.postNative({
+        type: nativeMessageType.downloadChunk,
+        id,
+        index,
+        data: btoa(binary),
+      });
+      index += 1;
+      size += bytes.length;
+      if (size > (this.session.config.maxDownloadBytes ?? 1073741824))
+        throw new Error("Download exceeds the configured size limit.");
+    };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const joined = new Uint8Array(pending.length + value.length);
+      joined.set(pending);
+      joined.set(value, pending.length);
+      let offset = 0;
+      while (joined.length - offset >= 491520) {
+        send(joined.subarray(offset, offset + 491520));
+        offset += 491520;
+      }
+      pending = joined.slice(offset);
+    }
+    if (pending.length) send(pending);
+    if (expectedSize !== undefined && expectedSize !== size)
+      throw new Error("Download size differs from its Content-Length.");
+    this.postNative({
+      type: nativeMessageType.downloadEnd,
+      id,
+      chunkCount: index,
+      size,
+    });
+    this.postResult(id, true, metadata);
+  }
+
   private handleMessage(value: unknown): void {
     const message = value as NativeMessage;
     if (!message || typeof message !== "object") {
@@ -185,6 +269,18 @@ export class NativeBridge {
     const id = message.id as string;
 
     if (message.type === nativeMessageType.command) {
+      if (
+        [
+          "attachments.download",
+          "reports.export",
+          "reports.jobs.download",
+        ].includes(message.action || "")
+      ) {
+        this.streamDownload(id, message).catch((error) =>
+          this.postResult(id, false, error),
+        );
+        return;
+      }
       this.commands
         .handle(message)
         .then((data) => this.postResult(id, true, data))
