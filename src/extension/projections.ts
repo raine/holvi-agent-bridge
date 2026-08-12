@@ -76,6 +76,16 @@ function decimal(value: unknown, label: string): Decimal {
   throw new Error(`${label} has an invalid decimal value.`);
 }
 
+function vatRate(value: unknown, label: string): Decimal | string {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return boundedString(value, label);
+}
+
 function requiredDecimal(value: unknown, label: string): string | number {
   const result = decimal(value, label);
   if (result === null) {
@@ -112,7 +122,7 @@ function price(
     gross: decimal(source.gross, `${label} gross`),
     net: decimal(source.net, `${label} net`),
     ...(includeVatRate
-      ? { vatRate: decimal(source.vat_rate, `${label} VAT rate`) }
+      ? { vatRate: vatRate(source.vat_rate, `${label} VAT rate`) }
       : {}),
   };
 }
@@ -917,13 +927,21 @@ export function projectReportJobs(value: unknown): JsonRecord {
 }
 
 export function projectAuditTypes(value: unknown): JsonRecord {
-  const source = Array.isArray(value)
-    ? value
-    : boundedArray(
-        record(value, "Activity types").results,
-        "Activity types",
-        200,
-      );
+  let source: unknown[];
+  if (Array.isArray(value)) {
+    source = value;
+  } else {
+    const typeClasses = record(value, "Activity types");
+    if (Array.isArray(typeClasses.results)) {
+      source = boundedArray(typeClasses.results, "Activity types", 200);
+    } else {
+      const keys = Object.keys(typeClasses);
+      if (keys.length > 200) {
+        throw new Error("Activity types exceeded their result limit.");
+      }
+      source = keys;
+    }
+  }
   const results = source.map((entry) =>
     typeof entry === "string"
       ? boundedString(entry, "Activity type")
@@ -933,6 +951,9 @@ export function projectAuditTypes(value: unknown): JsonRecord {
           "Activity type",
         ),
   );
+  if (new Set(results).size !== results.length) {
+    throw new Error("Activity types contain duplicate values.");
+  }
   return projection({ count: results.length, results });
 }
 

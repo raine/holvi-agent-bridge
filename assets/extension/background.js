@@ -61,6 +61,15 @@
     }
     throw new Error(`${label} has an invalid decimal value.`);
   }
+  function vatRate(value, label) {
+    if (value === null || value === undefined || value === "") {
+      return null;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    return boundedString(value, label);
+  }
   function requiredDecimal(value, label) {
     const result = decimal(value, label);
     if (result === null) {
@@ -90,7 +99,7 @@
       currency: optionalString(source.currency, `${label} currency`),
       gross: decimal(source.gross, `${label} gross`),
       net: decimal(source.net, `${label} net`),
-      ...includeVatRate ? { vatRate: decimal(source.vat_rate, `${label} VAT rate`) } : {}
+      ...includeVatRate ? { vatRate: vatRate(source.vat_rate, `${label} VAT rate`) } : {}
     };
   }
   function projection(value) {
@@ -580,8 +589,25 @@
     return projection({ count: results.length, results });
   }
   function projectAuditTypes(value) {
-    const source = Array.isArray(value) ? value : boundedArray(record(value, "Activity types").results, "Activity types", 200);
+    let source;
+    if (Array.isArray(value)) {
+      source = value;
+    } else {
+      const typeClasses = record(value, "Activity types");
+      if (Array.isArray(typeClasses.results)) {
+        source = boundedArray(typeClasses.results, "Activity types", 200);
+      } else {
+        const keys = Object.keys(typeClasses);
+        if (keys.length > 200) {
+          throw new Error("Activity types exceeded their result limit.");
+        }
+        source = keys;
+      }
+    }
     const results = source.map((entry) => typeof entry === "string" ? boundedString(entry, "Activity type") : boundedString(record(entry, "Activity type").value ?? record(entry, "Activity type").code, "Activity type"));
+    if (new Set(results).size !== results.length) {
+      throw new Error("Activity types contain duplicate values.");
+    }
     return projection({ count: results.length, results });
   }
   function projectAuditTraversalPage(value) {
@@ -1394,6 +1420,7 @@
       return projectSuggestions(await this.request(auth, `${this.debtPath(validUuid)}haip/bookkeeping-suggestions/`), validUuid);
     }
     async downloadResponse(auth, action, params) {
+      const fetchRequest = this.fetchRequest;
       if (action === "attachments.download") {
         const debtUuid = validateUuid(asString(params.debtUuid), "debt");
         const preview = await this.previewDebt(auth, debtUuid);
@@ -1403,11 +1430,14 @@
         const code = asString(params.attachmentCode);
         if (!code || Array.from(code).some((character) => character.charCodeAt(0) < 32))
           throw new Error("Attachment code is invalid.");
-        const redirect = await this.fetchRequest(`https://app.holvi.com/attachment/${encodeURIComponent(code)}/`, { credentials: "include", cache: "no-store", redirect: "manual" });
-        if (![301, 302, 303, 307, 308].includes(redirect.status))
-          throw new Error("Holvi attachment download did not return an expected redirect.");
-        const signed = this.signedStorageUrl(redirect.headers.get("location") || "");
-        const response = await this.fetchRequest(signed, {
+        const discovery = await fetchRequest(`https://app.holvi.com/attachment/${encodeURIComponent(code)}/`, { credentials: "include", cache: "no-store", redirect: "follow" });
+        if (!discovery.ok) {
+          await discovery.body?.cancel();
+          throw new Error("Holvi attachment download route failed.");
+        }
+        const signed = this.signedStorageUrl(discovery.url);
+        await discovery.body?.cancel();
+        const response = await fetchRequest(signed, {
           credentials: "omit",
           cache: "no-store",
           redirect: "error"
@@ -1437,7 +1467,7 @@
         });
         if (params.paymentAccountUuid)
           query.set("payment_account_uuid", asString(params.paymentAccountUuid));
-        const response = await this.fetchRequest(`https://app.holvi.com/group/${encodeURIComponent(this.session.config.poolHandle)}/reports/${spec.backend}/?${query}`, { credentials: "include", cache: "no-store", redirect: "error" });
+        const response = await fetchRequest(`https://app.holvi.com/group/${encodeURIComponent(this.session.config.poolHandle)}/reports/${spec.backend}/?${query}`, { credentials: "include", cache: "no-store", redirect: "error" });
         this.validateDownloadResponse(response, ["https://app.holvi.com"], `/group/${this.session.config.poolHandle}/reports/`);
         const extension = asString(params.format);
         return {
@@ -1454,7 +1484,7 @@
         const linkValue = await this.reportingRequest(auth, `/api/reporting/reports/${reportUuid}/download/`);
         const link = asString(linkValue?.link);
         const signed = this.signedStorageUrl(link);
-        const response = await this.fetchRequest(signed, {
+        const response = await fetchRequest(signed, {
           credentials: "omit",
           cache: "no-store",
           redirect: "error"
@@ -1522,7 +1552,8 @@
       headers.set("Authorization", `Bearer ${auth.token}`);
       if (auth.csrfToken)
         headers.set("X-CSRFToken", auth.csrfToken);
-      const response = await this.fetchRequest(`${this.staticConfig.apiOrigin}${path}`, {
+      const fetchRequest = this.fetchRequest;
+      const response = await fetchRequest(`${this.staticConfig.apiOrigin}${path}`, {
         ...options,
         headers,
         credentials: "include",

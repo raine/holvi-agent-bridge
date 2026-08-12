@@ -535,6 +535,59 @@ describe("Holvi API boundary", () => {
     expect(headers.get("Authorization")).toBe(`Bearer ${auth.token}`);
   });
 
+  test("proves attachment ownership before following a validated storage redirect", async () => {
+    const session = new BridgeSession(staticConfig);
+    session.configure(runtimeConfig);
+    const attachmentCode = "attachment-code";
+    const signedUrl =
+      "https://storage.holvi.com/media/receipt.pdf?signature=secret";
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const api = new HolviApi(staticConfig, session, async (input, init) => {
+      const url = requestUrl(input);
+      requests.push({ url, init });
+      if (url.endsWith(`/debt/${debtUuid}/`)) {
+        return jsonResponse({
+          ...debt(),
+          amount: "24.80",
+          currency: "EUR",
+          attachments: [
+            { code: attachmentCode, title: "Receipt", format: "pdf" },
+          ],
+        });
+      }
+      if (url === `https://app.holvi.com/attachment/${attachmentCode}/`) {
+        const response = new Response("discovery");
+        Object.defineProperty(response, "url", { value: signedUrl });
+        return response;
+      }
+      const response = new Response("pdf", {
+        headers: {
+          "content-type": "application/pdf",
+          "content-length": "3",
+        },
+      });
+      Object.defineProperty(response, "url", { value: signedUrl });
+      return response;
+    });
+
+    const download = await api.downloadResponse(auth, "attachments.download", {
+      debtUuid,
+      attachmentCode,
+    });
+    expect(download.metadata).toEqual({ debtUuid, attachmentCode });
+    const discovery = requests.find((request) =>
+      request.url.startsWith("https://app.holvi.com/attachment/"),
+    );
+    expect(discovery?.init?.credentials).toBe("include");
+    expect(discovery?.init?.redirect).toBe("follow");
+    const storage = requests.find((request) => request.url === signedUrl);
+    expect(storage?.init?.credentials).toBe("omit");
+    expect(storage?.init?.redirect).toBe("error");
+    expect(
+      new Headers(storage?.init?.headers).has("Authorization"),
+    ).toBeFalse();
+  });
+
   test("proves ready report ownership and omits credentials from storage", async () => {
     const session = new BridgeSession(staticConfig);
     session.configure(runtimeConfig);

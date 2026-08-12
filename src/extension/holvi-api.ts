@@ -511,6 +511,7 @@ export class HolviApi {
     fileName: string;
     metadata: Record<string, unknown>;
   }> {
+    const fetchRequest = this.fetchRequest;
     if (action === "attachments.download") {
       const debtUuid = validateUuid(asString(params.debtUuid), "debt");
       const preview = await this.previewDebt(auth, debtUuid);
@@ -527,18 +528,17 @@ export class HolviApi {
         Array.from(code).some((character) => character.charCodeAt(0) < 32)
       )
         throw new Error("Attachment code is invalid.");
-      const redirect = await this.fetchRequest(
+      const discovery = await fetchRequest(
         `https://app.holvi.com/attachment/${encodeURIComponent(code)}/`,
-        { credentials: "include", cache: "no-store", redirect: "manual" },
+        { credentials: "include", cache: "no-store", redirect: "follow" },
       );
-      if (![301, 302, 303, 307, 308].includes(redirect.status))
-        throw new Error(
-          "Holvi attachment download did not return an expected redirect.",
-        );
-      const signed = this.signedStorageUrl(
-        redirect.headers.get("location") || "",
-      );
-      const response = await this.fetchRequest(signed, {
+      if (!discovery.ok) {
+        await discovery.body?.cancel();
+        throw new Error("Holvi attachment download route failed.");
+      }
+      const signed = this.signedStorageUrl(discovery.url);
+      await discovery.body?.cancel();
+      const response = await fetchRequest(signed, {
         credentials: "omit",
         cache: "no-store",
         redirect: "error",
@@ -584,7 +584,7 @@ export class HolviApi {
       });
       if (params.paymentAccountUuid)
         query.set("payment_account_uuid", asString(params.paymentAccountUuid));
-      const response = await this.fetchRequest(
+      const response = await fetchRequest(
         `https://app.holvi.com/group/${encodeURIComponent(this.session.config.poolHandle)}/reports/${spec.backend}/?${query}`,
         { credentials: "include", cache: "no-store", redirect: "error" },
       );
@@ -611,7 +611,7 @@ export class HolviApi {
       );
       const link = asString((linkValue as Record<string, unknown>)?.link);
       const signed = this.signedStorageUrl(link);
-      const response = await this.fetchRequest(signed, {
+      const response = await fetchRequest(signed, {
         credentials: "omit",
         cache: "no-store",
         redirect: "error",
@@ -727,7 +727,8 @@ export class HolviApi {
     headers.set("Accept", "application/json");
     headers.set("Authorization", `Bearer ${auth.token}`);
     if (auth.csrfToken) headers.set("X-CSRFToken", auth.csrfToken);
-    const response = await this.fetchRequest(
+    const fetchRequest = this.fetchRequest;
+    const response = await fetchRequest(
       `${this.staticConfig.apiOrigin}${path}`,
       {
         ...options,
