@@ -3,10 +3,10 @@ title: Changelog
 description: Release notes for Holvi Agent Bridge.
 ---
 
-## Unreleased
+## v0.1.2 (2026-08-12)
 
-- Include value and booking dates, counterparty, bank reference, payment message,
-  and the Holvi archive identifier in `transactions get` output.
+- Include value and booking dates, counterparty, bank reference, payment
+  message, and the Holvi archive identifier in `transactions get` output.
 - Discover payment accounts with a dedicated read capability.
 - Export account statements, journals, ledgers, CAMT.052 files, and invoicing
   reports into approved local directories.
