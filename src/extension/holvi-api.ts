@@ -17,6 +17,7 @@ import {
   projectTransactionDetails,
   projectTransactionFeedPage,
   projectTransactionListing,
+  projectTransactionPaymentMetadata,
 } from "./projections.js";
 import type { Auth, StaticBridgeConfig } from "./background-types.js";
 import { BridgeSession, validateUuid } from "./session.js";
@@ -219,6 +220,12 @@ export class HolviApi {
     return `${this.session.apiRoot()}ux/payments-feed/?${query}`;
   }
 
+  paymentDetailPath(paymentUuid: string): string {
+    return `${this.session.apiRoot()}ux/payments-feed/${encodeURIComponent(
+      validateUuid(paymentUuid, "payment"),
+    )}/`;
+  }
+
   debtPath(debtUuid: string): string {
     return `${this.session.apiRoot()}debt/${encodeURIComponent(
       validateUuid(debtUuid, "debt"),
@@ -389,10 +396,25 @@ export class HolviApi {
           )
         : Promise.resolve(null),
     ]);
+    const paymentMetadata = paymentUuid
+      ? projectTransactionPaymentMetadata(
+          await this.request(auth, this.paymentDetailPath(paymentUuid)),
+          paymentUuid,
+        )
+      : null;
     return projectTransactionDetails({
       ...preview,
       paymentUuid,
       debtUuid: debt.debtUuid,
+      valueDate: debt.valueDate ?? paymentMetadata?.valueDate ?? null,
+      bookingDate: debt.bookingDate ?? paymentMetadata?.bookingDate ?? null,
+      counterparty:
+        debt.counterparty ??
+        paymentMetadata?.counterparty ??
+        preview.counterparty,
+      bankReference: paymentMetadata?.bankReference ?? null,
+      message: paymentMetadata?.message ?? null,
+      archiveIdentifier: debt.archiveIdentifier,
       card,
       account,
       cardholder: debt.cardholder,

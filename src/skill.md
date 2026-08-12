@@ -90,7 +90,8 @@ holvi reports types --json
   to a later command. Without `--json`, `transactions list` uses a human-readable
   table.
 - `transactions get` returns separate `paymentUuid` and `debtUuid` values plus
-  bounded card, account, cardholder, exchange-rate, merchant-address,
+  bounded value-date, booking-date, counterparty, bank-reference, message,
+  archive-identifier, card, account, cardholder, exchange-rate, merchant-address,
   merchant-category, payment-type, and attachment projections. Treat null fields
   as unavailable instead of deriving them.
 - `--from` and `--to` are inclusive `YYYY-MM-DD` calendar dates. With no dates,

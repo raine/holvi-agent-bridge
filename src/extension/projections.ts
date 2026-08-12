@@ -149,6 +149,15 @@ function timestamp(value: unknown, label: string): string {
   return text;
 }
 
+function optionalDate(value: unknown, label: string): string | null {
+  const text = optionalString(value, label);
+  if (!text) {
+    return null;
+  }
+  timestamp(text, label);
+  return text.slice(0, 10);
+}
+
 function nonnegativeInteger(value: unknown, label: string): number {
   const count =
     typeof value === "string" && /^\d{1,16}$/.test(value)
@@ -284,6 +293,10 @@ export function projectTransactionListing<T>(value: T): T {
 export interface TransactionDetailDebt {
   debtUuid: string;
   paymentAccountUuid: string;
+  valueDate: string | null;
+  bookingDate: string | null;
+  counterparty: string | null;
+  archiveIdentifier: string | null;
   cardProfileUuid: string | null;
   cardholder: string | null;
   exchangeRate: JsonRecord | null;
@@ -362,6 +375,13 @@ export function projectTransactionDetailDebt(
   return projection({
     debtUuid: requestedUuid,
     paymentAccountUuid: responseAccount,
+    valueDate: optionalDate(debt.value_date, "Transaction value date"),
+    bookingDate: optionalDate(debt.booking_date, "Transaction booking date"),
+    counterparty: optionalString(
+      debt.counterparty_name,
+      "Transaction counterparty",
+    ),
+    archiveIdentifier: optionalString(debt.code, "Holvi archive identifier"),
     cardProfileUuid,
     cardholder: cardProfileUuid
       ? optionalString(creator.displayname, "Transaction detail cardholder")
@@ -453,6 +473,57 @@ export function projectTransactionCard(
   return projection({
     cardProfileUuid: requestedCard,
     lastFour,
+  });
+}
+
+export interface TransactionPaymentMetadata {
+  valueDate: string | null;
+  bookingDate: string | null;
+  counterparty: string | null;
+  bankReference: string | null;
+  message: string | null;
+}
+
+export function projectTransactionPaymentMetadata(
+  value: unknown,
+  paymentUuid: string,
+): TransactionPaymentMetadata {
+  const payment = record(value, "Transaction payment details");
+  const requestedUuid = uuid(paymentUuid, "Payment UUID");
+  const responseUuid = uuid(payment.uuid, "Transaction payment details UUID");
+  if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
+    throw new Error(
+      "Holvi transaction payment UUID does not match the request.",
+    );
+  }
+  const counterparty = optionalRecord(
+    payment.counterparty,
+    "Transaction payment counterparty",
+  );
+  const bookingDate = optionalDate(
+    payment.booking_date ?? payment.ux_timestamp,
+    "Transaction booking date",
+  );
+  const valueDate = optionalDate(
+    payment.value_date ?? payment.ux_timestamp,
+    "Transaction value date",
+  );
+
+  return projection({
+    valueDate,
+    bookingDate,
+    counterparty: optionalString(
+      counterparty.display_name,
+      "Transaction payment counterparty name",
+    ),
+    bankReference: optionalString(
+      payment.structured_reference,
+      "Transaction bank reference",
+    ),
+    message: optionalString(
+      payment.unstructured_reference,
+      "Transaction payment message",
+    ),
   });
 }
 

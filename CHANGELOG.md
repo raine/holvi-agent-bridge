@@ -5,6 +5,9 @@ description: Release notes for Holvi Agent Bridge.
 
 ## Unreleased
 
+- Include value and booking dates, counterparty, bank reference, message, and the
+  Holvi archive identifier in transaction details.
+
 - Discover payment accounts with a dedicated read capability.
 - Export account statements, journals, ledgers, CAMT.052 files, and invoicing
   reports into approved local directories.

@@ -18,6 +18,7 @@ import {
   projectTransactionCard,
   projectTransactionDetailDebt,
   projectTransactionFeedPage,
+  projectTransactionPaymentMetadata,
   projectUploadDebtRead,
 } from "./projections.js";
 
@@ -302,6 +303,10 @@ describe("transaction detail projections", () => {
     ).toEqual({
       debtUuid,
       paymentAccountUuid,
+      valueDate: null,
+      bookingDate: "2026-08-01",
+      counterparty: "Example merchant",
+      archiveIdentifier: "DEBT-1",
       cardProfileUuid: "55555555-5555-4555-8555-555555555555",
       cardholder: "Example Cardholder",
       exchangeRate: {
@@ -319,6 +324,56 @@ describe("transaction detail projections", () => {
       merchantCategory: "Office Supplies",
       paymentType: "POS",
     });
+  });
+
+  test("projects bank metadata from the account-scoped payment", () => {
+    const paymentUuid = "44444444-4444-4444-8444-444444444444";
+    expect(
+      projectTransactionPaymentMetadata(
+        {
+          uuid: paymentUuid,
+          value_date: "2026-08-01",
+          booking_date: "2026-08-02",
+          ux_timestamp: "2026-08-02T10:15:00Z",
+          counterparty: { display_name: "Example merchant" },
+          structured_reference: "1234561",
+          unstructured_reference: "Invoice 123",
+        },
+        paymentUuid,
+      ),
+    ).toEqual({
+      valueDate: "2026-08-01",
+      bookingDate: "2026-08-02",
+      counterparty: "Example merchant",
+      bankReference: "1234561",
+      message: "Invoice 123",
+    });
+    expect(
+      projectTransactionPaymentMetadata(
+        {
+          uuid: paymentUuid,
+          ux_timestamp: "2026-08-03T10:15:00Z",
+          counterparty: {},
+        },
+        paymentUuid,
+      ),
+    ).toMatchObject({
+      valueDate: "2026-08-03",
+      bookingDate: "2026-08-03",
+    });
+  });
+
+  test("rejects payment identity mismatches", () => {
+    expect(() =>
+      projectTransactionPaymentMetadata(
+        {
+          uuid: "66666666-6666-4666-8666-666666666666",
+          ux_timestamp: "2026-08-02T10:15:00Z",
+          counterparty: {},
+        },
+        "44444444-4444-4444-8444-444444444444",
+      ),
+    ).toThrow("payment UUID does not match");
   });
 
   test("projects only the configured account and card last four", () => {

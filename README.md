@@ -606,14 +606,16 @@ prints a compact payment detail projection.
 holvi transactions get --debt DEBT_UUID_OR_PAYMENT_PAGE_URL
 ```
 
-The result keeps `paymentUuid` and `debtUuid` separate. It includes the card's
-last four digits, configured payment account with a shortened IBAN, cardholder,
-exchange rate, merchant address, merchant category, and payment type when Holvi
-supplies those fields. The result also includes compact debt preview fields and
-bounded attachment metadata for receipt workflows. The bridge validates the debt
-and card profile against the configured payment account, selects exactly one
-matching account from the bounded pool response, and searches the bounded payment
-feed for the related payment UUID.
+The result keeps `paymentUuid` and `debtUuid` separate. It includes value and
+booking dates, counterparty, bank reference, message, Holvi archive identifier,
+the card's last four digits, configured payment account with a shortened IBAN,
+cardholder, exchange rate, merchant address, merchant category, and payment type
+when Holvi supplies those fields. The result also includes compact debt preview
+fields and bounded attachment metadata for receipt workflows. The bridge
+validates the debt and payment detail against their requested identifiers, checks
+the debt and card profile against the configured payment account, selects exactly
+one matching account from the bounded pool response, and searches the bounded
+payment feed for the related payment UUID.
 
 Holvi's `/group/{group}/payment/{uuid}/` route contains `debtUuid`, not
 `paymentUuid`. `--debt` accepts either a debt UUID or the full

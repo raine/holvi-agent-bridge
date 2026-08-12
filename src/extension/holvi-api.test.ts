@@ -148,6 +148,10 @@ describe("Holvi API boundary", () => {
       if (url.endsWith(`/debt/${debtUuid}/`)) {
         return jsonResponse({
           ...debt(),
+          code: "ARCHIVE-123",
+          value_date: "2026-08-01",
+          booking_date: "2026-08-02",
+          counterparty_name: "Example merchant",
           currency: "EUR",
           links: { card_profile: cardProfileUuid },
           creator: { displayname: "Example Cardholder" },
@@ -165,7 +169,7 @@ describe("Holvi API boundary", () => {
           },
         });
       }
-      if (url.includes("/ux/payments-feed/")) {
+      if (url.includes("/ux/payments-feed/?")) {
         feedPages += 1;
         return jsonResponse(
           feedPages === 1
@@ -180,6 +184,17 @@ describe("Holvi API boundary", () => {
               }
             : { results: [], pagination: { has_more: false } },
         );
+      }
+      if (url.endsWith(`/ux/payments-feed/${paymentUuid}/`)) {
+        return jsonResponse({
+          uuid: paymentUuid,
+          value_date: "2026-08-01",
+          booking_date: "2026-08-02",
+          ux_timestamp: "2026-08-02T10:15:00Z",
+          counterparty: { display_name: "Example merchant" },
+          structured_reference: "1234561",
+          unstructured_reference: "Invoice 123",
+        });
       }
       if (url.endsWith(`/cardprofile/${cardProfileUuid}/`)) {
         return jsonResponse({
@@ -208,6 +223,12 @@ describe("Holvi API boundary", () => {
       {
         paymentUuid,
         debtUuid,
+        valueDate: "2026-08-01",
+        bookingDate: "2026-08-02",
+        counterparty: "Example merchant",
+        bankReference: "1234561",
+        message: "Invoice 123",
+        archiveIdentifier: "ARCHIVE-123",
         card: {
           cardProfileUuid,
           lastFour: "1533",
@@ -238,11 +259,12 @@ describe("Holvi API boundary", () => {
     expect(urls).toEqual(
       expect.arrayContaining([
         `https://holvi.com/api/pool/example/debt/${debtUuid}/`,
+        `https://holvi.com/api/pool/example/ux/payments-feed/${paymentUuid}/`,
         `https://holvi.com/api/pool/example/cardprofile/${cardProfileUuid}/`,
         "https://holvi.com/api/pool/example/",
       ]),
     );
-    const feedUrls = urls.filter((url) => url.includes("payments-feed"));
+    const feedUrls = urls.filter((url) => url.includes("payments-feed/?"));
     expect(feedUrls).toHaveLength(2);
     expect(feedUrls[0]).toContain(
       `payment_account=${runtimeConfig.paymentAccountUuid}`,

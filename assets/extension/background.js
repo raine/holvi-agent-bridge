@@ -118,6 +118,14 @@
     }
     return text;
   }
+  function optionalDate(value, label) {
+    const text = optionalString(value, label);
+    if (!text) {
+      return null;
+    }
+    timestamp(text, label);
+    return text.slice(0, 10);
+  }
   function nonnegativeInteger(value, label) {
     const count = typeof value === "string" && /^\d{1,16}$/.test(value) ? Number(value) : value;
     if (!Number.isSafeInteger(count) || count < 0) {
@@ -235,6 +243,10 @@
     return projection({
       debtUuid: requestedUuid,
       paymentAccountUuid: responseAccount,
+      valueDate: optionalDate(debt.value_date, "Transaction value date"),
+      bookingDate: optionalDate(debt.booking_date, "Transaction booking date"),
+      counterparty: optionalString(debt.counterparty_name, "Transaction counterparty"),
+      archiveIdentifier: optionalString(debt.code, "Holvi archive identifier"),
       cardProfileUuid,
       cardholder: cardProfileUuid ? optionalString(creator.displayname, "Transaction detail cardholder") : null,
       exchangeRate,
@@ -286,6 +298,24 @@
     return projection({
       cardProfileUuid: requestedCard,
       lastFour
+    });
+  }
+  function projectTransactionPaymentMetadata(value, paymentUuid) {
+    const payment2 = record(value, "Transaction payment details");
+    const requestedUuid = uuid(paymentUuid, "Payment UUID");
+    const responseUuid = uuid(payment2.uuid, "Transaction payment details UUID");
+    if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
+      throw new Error("Holvi transaction payment UUID does not match the request.");
+    }
+    const counterparty = optionalRecord(payment2.counterparty, "Transaction payment counterparty");
+    const bookingDate = optionalDate(payment2.booking_date ?? payment2.ux_timestamp, "Transaction booking date");
+    const valueDate = optionalDate(payment2.value_date ?? payment2.ux_timestamp, "Transaction value date");
+    return projection({
+      valueDate,
+      bookingDate,
+      counterparty: optionalString(counterparty.display_name, "Transaction payment counterparty name"),
+      bankReference: optionalString(payment2.structured_reference, "Transaction bank reference"),
+      message: optionalString(payment2.unstructured_reference, "Transaction payment message")
     });
   }
   function projectTransactionDetails(value) {
@@ -1247,6 +1277,9 @@
       }
       return `${this.session.apiRoot()}ux/payments-feed/?${query}`;
     }
+    paymentDetailPath(paymentUuid) {
+      return `${this.session.apiRoot()}ux/payments-feed/${encodeURIComponent(validateUuid(paymentUuid, "payment"))}/`;
+    }
     debtPath(debtUuid) {
       return `${this.session.apiRoot()}debt/${encodeURIComponent(validateUuid(debtUuid, "debt"))}/`;
     }
@@ -1350,10 +1383,17 @@
         this.request(auth, this.session.apiRoot()).then((value) => projectTransactionAccount(value, paymentAccountUuid)),
         debt.cardProfileUuid ? this.request(auth, this.cardPath(debt.cardProfileUuid)).then((value) => projectTransactionCard(value, debt.cardProfileUuid, paymentAccountUuid)) : Promise.resolve(null)
       ]);
+      const paymentMetadata = paymentUuid ? projectTransactionPaymentMetadata(await this.request(auth, this.paymentDetailPath(paymentUuid)), paymentUuid) : null;
       return projectTransactionDetails({
         ...preview,
         paymentUuid,
         debtUuid: debt.debtUuid,
+        valueDate: debt.valueDate ?? paymentMetadata?.valueDate ?? null,
+        bookingDate: debt.bookingDate ?? paymentMetadata?.bookingDate ?? null,
+        counterparty: debt.counterparty ?? paymentMetadata?.counterparty ?? preview.counterparty,
+        bankReference: paymentMetadata?.bankReference ?? null,
+        message: paymentMetadata?.message ?? null,
+        archiveIdentifier: debt.archiveIdentifier,
         card,
         account,
         cardholder: debt.cardholder,
