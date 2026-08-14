@@ -394,6 +394,7 @@ holvi audit list --from 2022-01-01 --to 2026-12-31 \
 | [`config path`](#holvi-config-path)                          | none                                                       | Print the private config path                      |
 | [`capabilities`](#holvi-capabilities)                       | none                                                       | Show enabled capabilities and operations          |
 | [`doctor`](#holvi-doctor)                                   | any configured capability                                  | Verify the Chrome connection and an API surface   |
+| [`accounts list`](#holvi-accounts-list)                     | `accounts.read`                                            | List payment accounts and balances                |
 | [`transactions`](#holvi-transactions)                       | `transactions.read`, optionally `comments.write`            | List or inspect transactions and manage comments  |
 | [`transactions list`](#holvi-transactions-list)             | `transactions.read`                                        | List payment-account transactions                 |
 | [`transactions get`](#holvi-transactions-get)               | `transactions.read`                                        | Inspect one transaction's payment details         |
@@ -532,6 +533,19 @@ requires a read capability. The default report groups connection, account,
 capability, and probe status into aligned terminal sections. Use `--json` to get
 the same result as JSON, including `probeAction`, account scope, and capability
 metadata.
+
+### `holvi accounts list`
+
+Lists payment accounts in the configured pool using `accounts.read`.
+
+```sh
+holvi accounts list [--json]
+```
+
+Each account includes its UUID, name, IBAN, currency, state, ledger balance,
+available balance, and blocked balance when Holvi supplies those values. Human
+output masks the IBAN except for its final four characters. Use `--json` for the
+bounded typed projection.
 
 ### `holvi transactions`
 

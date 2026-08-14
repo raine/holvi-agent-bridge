@@ -94,6 +94,8 @@ holvi reports types --json
   archive-identifier, card, account, cardholder, exchange-rate, merchant-address,
   merchant-category, payment-type, and attachment projections. Treat null fields
   as unavailable instead of deriving them.
+- `accounts list` returns bounded ledger, available, and blocked balances in the
+  payment account currency. Preserve decimal strings for exact calculations.
 - `--from` and `--to` are inclusive `YYYY-MM-DD` calendar dates. With no dates,
   `transactions list` returns all records available within bridge limits.
 - Transaction `direction` preserves a nonempty Holvi value. An absent or empty

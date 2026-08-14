@@ -8,6 +8,7 @@ import {
 } from "./policy.js";
 import {
   projectAuditPage,
+  projectAccounts,
   projectAttachmentDeletionDebt,
   projectBookkeepingDebt,
   projectCategories,
@@ -133,6 +134,54 @@ describe("capability policy", () => {
         "audit.read",
       ]),
     );
+  });
+});
+
+describe("account projections", () => {
+  test("projects balances from payment accounts", () => {
+    expect(
+      projectAccounts({
+        paymentaccounts: [
+          {
+            uuid: paymentAccountUuid,
+            name: "Main account",
+            iban: "FI0012345600000785",
+            currency: "EUR",
+            balance: "1234.56",
+            available_balance: "1200.00",
+            blocked_balance: "34.56",
+            state: "active",
+          },
+        ],
+      }),
+    ).toEqual({
+      count: 1,
+      results: [
+        {
+          paymentAccountUuid,
+          name: "Main account",
+          iban: "FI0012345600000785",
+          currency: "EUR",
+          balance: "1234.56",
+          availableBalance: "1200.00",
+          blockedBalance: "34.56",
+          state: "active",
+        },
+      ],
+    });
+  });
+
+  test("rejects malformed account balances", () => {
+    expect(() =>
+      projectAccounts({
+        paymentaccounts: [
+          {
+            uuid: paymentAccountUuid,
+            balance: "not-a-balance",
+          },
+        ],
+      }),
+    ).toThrow("invalid decimal value");
   });
 });
 

@@ -1521,7 +1521,17 @@ fn print_accounts(value: &Value) {
         } else {
             format!("•••• {suffix}")
         };
-        println!("{name}\t{uuid}\t{currency}\t{masked}");
+        let decimal = |key: &str| match account.get(key) {
+            Some(Value::String(value)) => value.clone(),
+            Some(Value::Number(value)) => value.to_string(),
+            _ => "-".to_owned(),
+        };
+        let balance = decimal("balance");
+        let available = decimal("availableBalance");
+        let blocked = decimal("blockedBalance");
+        println!(
+            "{name}\t{uuid}\t{currency}\t{masked}\tbalance {balance}\tavailable {available}\tblocked {blocked}"
+        );
     }
 }
 

@@ -574,6 +574,9 @@
         name: optionalString(account.name, "Payment account name"),
         iban: optionalString(account.iban, "Payment account IBAN"),
         currency: optionalString(account.currency, "Payment account currency"),
+        balance: decimal(account.balance, "Payment account balance"),
+        availableBalance: decimal(account.available_balance, "Payment account available balance"),
+        blockedBalance: decimal(account.blocked_balance, "Payment account blocked balance"),
         state: optionalString(account.state ?? account.status, "Payment account state")
       };
     });

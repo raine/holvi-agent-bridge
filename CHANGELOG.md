@@ -3,6 +3,10 @@ title: Changelog
 description: Release notes for Holvi Agent Bridge.
 ---
 
+## Unreleased
+
+- Include ledger, available, and blocked balances in `accounts list` output.
+
 ## v0.1.2 (2026-08-12)
 
 - Include value and booking dates, counterparty, bank reference, payment
