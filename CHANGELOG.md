@@ -3,6 +3,10 @@ title: Changelog
 description: Release notes for Holvi Agent Bridge.
 ---
 
+## v0.1.4 (2026-08-14)
+
+- Remove download size limit configuration from installation.
+
 ## v0.1.3 (2026-08-14)
 
 - Reinstall interactively with settings and capability selections remembered

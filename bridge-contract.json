@@ -2,8 +2,8 @@
   "versions": {
     "signedRequest": 1,
     "nativeProtocol": 2,
-    "host": "0.1.3",
-    "extension": "0.1.3",
+    "host": "0.1.4",
+    "extension": "0.1.4",
     "extensionManifest": 3
   },
   "identity": {
