@@ -3,7 +3,7 @@ title: Changelog
 description: Release notes for Holvi Agent Bridge.
 ---
 
-## Unreleased
+## v0.1.3 (2026-08-14)
 
 - Reinstall interactively with settings and capability selections remembered
   from the existing private configuration.

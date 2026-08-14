@@ -6,7 +6,7 @@ _HOLVI_AGENT_BRIDGE_STATIC_CONFIG = Object.freeze({
     groupPathPrefix: "/group/",
     nativeHostName: "app.holvi_agent_bridge",
     nativeProtocolVersion: 2,
-    extensionVersion: "0.1.2",
+    extensionVersion: "0.1.3",
     maxFileBytes: 26214400,
     maxDownloadBytes: 1073741824,
     maxTransactionPages: 200,
