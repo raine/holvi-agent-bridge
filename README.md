@@ -205,6 +205,11 @@ Use `holvi config edit` to open the private configuration in your editor.
 - Writes require an explicit confirmation and are verified against Holvi.
 - Attachment deletion has a separate capability because it is irreversible.
 
+## Related project
+
+For companies using Lemonaid, see
+[Lemonaid Agent Bridge](https://github.com/raine/lemonaid-agent-bridge).
+
 ## Build from source
 
 Building requires Rust 1.88 or later, Bun, and the locked dependencies:
