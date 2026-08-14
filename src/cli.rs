@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail, ensure};
 use chrono::NaiveDate;
 use clap::{Args, CommandFactory, Parser, Subcommand};
+use dialoguer::{Input, MultiSelect, theme::ColorfulTheme};
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -197,12 +198,12 @@ struct OutputArgs {
 struct InstallArgs {
     /// Full Holvi company group URL
     #[arg(long)]
-    group_url: String,
+    group_url: Option<String>,
     /// Payment account UUID used by the transaction feed
     #[arg(long)]
-    account: String,
+    account: Option<String>,
     /// Enable a capability (repeatable)
-    #[arg(long = "capability", required = true)]
+    #[arg(long = "capability")]
     capabilities: Vec<String>,
     /// Allow receipt files below this directory (repeatable)
     #[arg(long = "receipt-root")]
@@ -211,11 +212,222 @@ struct InstallArgs {
     #[arg(long = "export-root")]
     export_roots: Vec<PathBuf>,
     /// Maximum bytes accepted for one download
-    #[arg(long, default_value_t = DEFAULT_MAX_DOWNLOAD_BYTES)]
-    max_download_bytes: u64,
+    #[arg(long)]
+    max_download_bytes: Option<u64>,
     /// Print machine-readable JSON
     #[arg(long)]
     json: bool,
+}
+
+trait InstallPrompts {
+    fn required_text(&mut self, label: &str, default: Option<&str>) -> Result<String>;
+    fn capabilities(&mut self, defaults: &[String]) -> Result<Vec<String>>;
+    fn paths(&mut self, label: &str, defaults: &[PathBuf], required: bool) -> Result<Vec<PathBuf>>;
+    fn positive_u64(&mut self, label: &str, default: u64) -> Result<u64>;
+}
+
+struct TerminalInstallPrompts {
+    theme: ColorfulTheme,
+}
+
+impl TerminalInstallPrompts {
+    fn new() -> Self {
+        Self {
+            theme: ColorfulTheme::default(),
+        }
+    }
+}
+
+impl InstallPrompts for TerminalInstallPrompts {
+    fn required_text(&mut self, label: &str, default: Option<&str>) -> Result<String> {
+        let mut input = Input::<String>::with_theme(&self.theme).with_prompt(label);
+        if let Some(default) = default.filter(|value| !value.is_empty()) {
+            input = input.default(default.to_owned());
+        }
+        input
+            .interact_text()
+            .with_context(|| format!("Unable to read {label}."))
+    }
+
+    fn capabilities(&mut self, defaults: &[String]) -> Result<Vec<String>> {
+        let selected = SUPPORTED_CAPABILITIES
+            .iter()
+            .map(|capability| defaults.iter().any(|value| value == capability))
+            .collect::<Vec<_>>();
+        loop {
+            let selection = MultiSelect::with_theme(&self.theme)
+                .with_prompt("Capabilities (Space toggles, Enter confirms)")
+                .items(SUPPORTED_CAPABILITIES)
+                .defaults(&selected)
+                .interact_opt()
+                .context("Unable to read capabilities.")?
+                .context("Installation cancelled.")?;
+            if !selection.is_empty() {
+                return Ok(selection
+                    .into_iter()
+                    .map(|index| SUPPORTED_CAPABILITIES[index].to_owned())
+                    .collect());
+            }
+            eprintln!("Select at least one capability.");
+        }
+    }
+
+    fn paths(&mut self, label: &str, defaults: &[PathBuf], required: bool) -> Result<Vec<PathBuf>> {
+        let rendered = defaults
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(";");
+        loop {
+            let mut input = Input::<String>::with_theme(&self.theme)
+                .with_prompt(label)
+                .allow_empty(true);
+            if !rendered.is_empty() {
+                input = input.default(rendered.clone());
+            }
+            let value = input
+                .interact_text()
+                .with_context(|| format!("Unable to read {label}."))?;
+            let paths = path_list(&value, defaults);
+            if !required || !paths.is_empty() {
+                return Ok(paths);
+            }
+            eprintln!("At least one folder is required by the selected capabilities.");
+        }
+    }
+
+    fn positive_u64(&mut self, label: &str, default: u64) -> Result<u64> {
+        Input::<u64>::with_theme(&self.theme)
+            .with_prompt(label)
+            .default(default)
+            .interact_text()
+            .with_context(|| format!("Unable to read {label}."))
+    }
+}
+
+fn path_list(value: &str, defaults: &[PathBuf]) -> Vec<PathBuf> {
+    if value == "-" {
+        return Vec::new();
+    }
+    if value.trim().is_empty() {
+        return defaults.to_vec();
+    }
+    value
+        .split(';')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn previous_group_url(config: &BridgeConfig) -> String {
+    let mut url = Url::parse(ACCOUNT_ORIGIN).expect("constant account origin");
+    url.path_segments_mut()
+        .expect("account origin supports path segments")
+        .extend(["group", &config.group_path_segment, ""]);
+    url.into()
+}
+
+fn interactive_install_options<P: InstallPrompts>(
+    args: InstallArgs,
+    previous: Option<&BridgeConfig>,
+    prompts: &mut P,
+) -> Result<InstallOptions> {
+    let previous_group = previous.map(previous_group_url);
+    let group_url = match args.group_url {
+        Some(value) => value,
+        None => prompts.required_text("Holvi group URL", previous_group.as_deref())?,
+    };
+    let payment_account_uuid = match args.account {
+        Some(value) => value,
+        None => prompts.required_text(
+            "Payment account UUID",
+            previous.map(|config| config.payment_account_uuid.as_str()),
+        )?,
+    };
+    let capabilities = if args.capabilities.is_empty() {
+        let defaults = previous
+            .map(|config| config.capabilities.clone())
+            .unwrap_or_else(|| vec!["transactions.read".to_owned()]);
+        prompts.capabilities(&defaults)?
+    } else {
+        args.capabilities
+    };
+    let receipt_roots = if args.receipt_roots.is_empty() {
+        prompts.paths(
+            "Receipt roots separated by semicolons (- clears)",
+            previous.map_or(&[], |config| config.receipt_roots.as_slice()),
+            capabilities
+                .iter()
+                .any(|value| value == "attachments.write"),
+        )?
+    } else {
+        args.receipt_roots
+    };
+    let export_roots = if args.export_roots.is_empty() {
+        prompts.paths(
+            "Export roots separated by semicolons (- clears)",
+            previous.map_or(&[], |config| config.export_roots.as_slice()),
+            capabilities
+                .iter()
+                .any(|value| matches!(value.as_str(), "reports.read" | "attachments.read")),
+        )?
+    } else {
+        args.export_roots
+    };
+    let max_download_default = previous
+        .map(|config| config.max_download_bytes)
+        .unwrap_or(DEFAULT_MAX_DOWNLOAD_BYTES);
+    let max_download_bytes = match args.max_download_bytes {
+        Some(value) => value,
+        None => prompts.positive_u64("Maximum download bytes", max_download_default)?,
+    };
+    ensure!(
+        max_download_bytes > 0,
+        "Maximum download bytes must be positive."
+    );
+
+    Ok(InstallOptions {
+        group_url,
+        payment_account_uuid,
+        capabilities,
+        receipt_roots,
+        export_roots,
+        max_download_bytes,
+    })
+}
+
+fn install_options(args: InstallArgs) -> Result<(InstallOptions, bool)> {
+    let json_output = args.json;
+    let needs_interaction =
+        args.group_url.is_none() || args.account.is_none() || args.capabilities.is_empty();
+    if !needs_interaction {
+        return Ok((
+            InstallOptions {
+                group_url: args.group_url.expect("checked group URL"),
+                payment_account_uuid: args.account.expect("checked account"),
+                capabilities: args.capabilities,
+                receipt_roots: args.receipt_roots,
+                export_roots: args.export_roots,
+                max_download_bytes: args
+                    .max_download_bytes
+                    .unwrap_or(DEFAULT_MAX_DOWNLOAD_BYTES),
+            },
+            json_output,
+        ));
+    }
+    ensure!(
+        !json_output,
+        "Interactive installation cannot be combined with --json. Supply --group-url, --account, and at least one --capability."
+    );
+    ensure!(
+        io::stdin().is_terminal() && io::stderr().is_terminal(),
+        "Incomplete install settings require an interactive terminal. Supply --group-url, --account, and at least one --capability."
+    );
+    let previous = load_config().ok().map(|(config, _)| config);
+    let mut prompts = TerminalInstallPrompts::new();
+    let options = interactive_install_options(args, previous.as_ref(), &mut prompts)?;
+    Ok((options, false))
 }
 
 #[derive(Args)]
@@ -460,15 +672,8 @@ pub async fn run() -> Result<()> {
         return Ok(());
     };
     if let Command::Install(args) = command {
-        let json_output = args.json;
-        let result = install_bridge(InstallOptions {
-            group_url: args.group_url,
-            payment_account_uuid: args.account,
-            capabilities: args.capabilities,
-            receipt_roots: args.receipt_roots,
-            export_roots: args.export_roots,
-            max_download_bytes: args.max_download_bytes,
-        })?;
+        let (options, json_output) = install_options(args)?;
+        let result = install_bridge(options)?;
         if json_output {
             println!("{}", serde_json::to_string_pretty(&result)?);
         } else {
@@ -2237,5 +2442,93 @@ mod tests {
         };
         assert_eq!(args.capabilities.len(), 2);
         assert_eq!(args.receipt_roots.len(), 2);
+    }
+
+    #[test]
+    fn parses_install_without_flags_for_interactive_use() {
+        let cli = Cli::try_parse_from(["holvi", "install"]).unwrap();
+        let Some(Command::Install(args)) = cli.command else {
+            panic!()
+        };
+        assert!(args.group_url.is_none());
+        assert!(args.account.is_none());
+        assert!(args.capabilities.is_empty());
+        assert!(args.max_download_bytes.is_none());
+    }
+
+    #[derive(Default)]
+    struct RememberingPrompts {
+        capability_defaults: Vec<String>,
+    }
+
+    impl InstallPrompts for RememberingPrompts {
+        fn required_text(&mut self, _label: &str, default: Option<&str>) -> Result<String> {
+            Ok(default.unwrap_or_default().to_owned())
+        }
+
+        fn capabilities(&mut self, defaults: &[String]) -> Result<Vec<String>> {
+            self.capability_defaults = defaults.to_vec();
+            Ok(defaults.to_vec())
+        }
+
+        fn paths(
+            &mut self,
+            _label: &str,
+            defaults: &[PathBuf],
+            _required: bool,
+        ) -> Result<Vec<PathBuf>> {
+            Ok(defaults.to_vec())
+        }
+
+        fn positive_u64(&mut self, _label: &str, default: u64) -> Result<u64> {
+            Ok(default)
+        }
+    }
+
+    #[test]
+    fn interactive_install_remembers_existing_settings() {
+        let previous = BridgeConfig {
+            group_path_segment: "AbC123+example".to_owned(),
+            pool_handle: "AbC123".to_owned(),
+            payment_account_uuid: "11111111-1111-4111-8111-111111111111".to_owned(),
+            capabilities: vec!["transactions.read".to_owned(), "accounts.read".to_owned()],
+            receipt_roots: vec![PathBuf::from("/receipts")],
+            export_roots: vec![PathBuf::from("/exports")],
+            max_file_bytes: 25 * 1024 * 1024,
+            max_download_bytes: 512 * 1024 * 1024,
+            hmac_secret: "a".repeat(64),
+        };
+        let args = InstallArgs {
+            group_url: None,
+            account: None,
+            capabilities: Vec::new(),
+            receipt_roots: Vec::new(),
+            export_roots: Vec::new(),
+            max_download_bytes: None,
+            json: false,
+        };
+        let mut prompts = RememberingPrompts::default();
+
+        let options = interactive_install_options(args, Some(&previous), &mut prompts).unwrap();
+
+        assert_eq!(
+            options.group_url,
+            "https://account.app.holvi.com/group/AbC123+example/"
+        );
+        assert_eq!(options.payment_account_uuid, previous.payment_account_uuid);
+        assert_eq!(options.capabilities, previous.capabilities);
+        assert_eq!(options.receipt_roots, previous.receipt_roots);
+        assert_eq!(options.export_roots, previous.export_roots);
+        assert_eq!(options.max_download_bytes, previous.max_download_bytes);
+        assert_eq!(prompts.capability_defaults, previous.capabilities);
+    }
+
+    #[test]
+    fn interactive_folder_lists_can_be_cleared() {
+        assert!(path_list("-", &[PathBuf::from("/previous")]).is_empty());
+        assert_eq!(
+            path_list("/one;/two with spaces", &[]),
+            vec![PathBuf::from("/one"), PathBuf::from("/two with spaces")]
+        );
     }
 }

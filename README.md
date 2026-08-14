@@ -414,9 +414,19 @@ holvi audit list --from 2022-01-01 --to 2026-12-31 \
 ### `holvi install`
 
 Writes the private config, installs the bundled extension files, and registers
-the Chrome Native Messaging host. You can repeat `--capability` and
-`--receipt-root`. The command keeps their original order and removes duplicates.
-It also reuses an existing valid HMAC secret.
+the Chrome Native Messaging host. Run `holvi install` in a terminal for an
+interactive setup. Existing group, account, capabilities, approved folders, and
+download-size limit appear as defaults, so pressing Enter through the prompts
+reinstalls the previous configuration.
+
+```sh
+holvi install
+```
+
+For scripts, supply the required scope explicitly. You can repeat
+`--capability`, `--receipt-root`, and `--export-root`. The command keeps their
+original order and removes duplicates. It also reuses an existing valid HMAC
+secret.
 
 ```sh
 holvi install \
@@ -425,18 +435,28 @@ holvi install \
   --capability CAPABILITY \
   [--capability CAPABILITY] \
   [--receipt-root /absolute/path] \
+  [--export-root /absolute/path] \
+  [--max-download-bytes BYTES] \
   [--json]
 ```
 
-| Option                    | Required | Description                                         |
-| ------------------------- | -------- | --------------------------------------------------- |
-| `--group-url URL`         | yes      | Full `https://account.app.holvi.com/group/.../` URL |
-| `--account UUID`          | yes      | Payment account UUID used by the transaction feed   |
-| `--capability CAPABILITY` | yes      | Capability to enable, repeatable                    |
-| `--receipt-root PATH`     | no       | Approved absolute attachment directory, repeatable  |
-| `--json`                  | no       | Print the installation result as JSON               |
+| Option                       | Scripted install | Description                                         |
+| ---------------------------- | ---------------- | --------------------------------------------------- |
+| `--group-url URL`            | required         | Full `https://account.app.holvi.com/group/.../` URL |
+| `--account UUID`             | required         | Payment account UUID used by the transaction feed   |
+| `--capability CAPABILITY`    | required         | Capability to enable, repeatable                    |
+| `--receipt-root PATH`        | optional         | Approved absolute attachment directory, repeatable  |
+| `--export-root PATH`         | optional         | Approved absolute export directory, repeatable      |
+| `--max-download-bytes BYTES` | optional         | Maximum bytes accepted for one download             |
+| `--json`                     | optional         | Print the installation result as JSON               |
 
-`attachments.write` requires at least one receipt root. The default report shows
+Interactive capability selection uses arrow keys to move, Space to toggle, and
+Enter to confirm. Existing capabilities start selected. Folder prompts accept
+semicolon-separated paths. Press Enter to retain a remembered folder list or
+enter `-` to clear it. `attachments.write` requires at least one receipt root.
+`reports.read` and `attachments.read` require at least one export root.
+
+The default report shows
 the config path, stable extension ID, unpacked extension path, native host
 manifest path, restart status, and next steps. Installation asks an idle native
 host to restart with a signed request. The extension then reconnects to the

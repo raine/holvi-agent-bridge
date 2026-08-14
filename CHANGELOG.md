@@ -5,6 +5,8 @@ description: Release notes for Holvi Agent Bridge.
 
 ## Unreleased
 
+- Reinstall interactively with settings and capability selections remembered
+  from the existing private configuration.
 - Include ledger, available, and blocked balances in `accounts list` output.
 
 ## v0.1.2 (2026-08-12)

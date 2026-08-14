@@ -251,7 +251,15 @@ this sequence:
 
 ## Installation workflow
 
-Use installation only when the user asks to configure or reconfigure the bridge:
+Use installation only when the user asks to configure or reconfigure the bridge.
+For a user-driven terminal setup, `holvi install` opens interactive prompts and
+uses the existing private configuration as defaults:
+
+```sh
+holvi install
+```
+
+For an explicit scripted setup:
 
 ```sh
 holvi install \
@@ -261,9 +269,15 @@ holvi install \
   --receipt-root /absolute/path/to/receipts
 ```
 
-- Repeat `--capability` and `--receipt-root` for each approved value.
-- `attachments.write` requires at least one receipt root. `attachments.delete`
-  does not grant local file access.
+- Repeat `--capability`, `--receipt-root`, and `--export-root` for each approved
+  value in scripted installs.
+- Interactive installation remembers the group, account, capabilities, folder
+  roots, and download-size limit. Arrow keys move through capabilities, Space
+  toggles them, and Enter confirms. Empty text answers keep remembered values,
+  while `-` clears a folder list.
+- `attachments.write` requires at least one receipt root. `reports.read` and
+  `attachments.read` require at least one export root. `attachments.delete` does
+  not grant local file access.
 - Installation updates the private account scope and capability allowlist. Show
   the proposed scope to the user before running it.
 
