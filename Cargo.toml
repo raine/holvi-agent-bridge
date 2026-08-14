@@ -2,7 +2,7 @@
 name = "holvi-agent-bridge"
 version = "0.1.2"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["Raine Virta"]
 license = "MIT"
 description = "Capability-scoped local agent bridge for Holvi"
@@ -17,22 +17,22 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 dirs = "6.0"
 dialoguer = { version = "0.12", default-features = false }
 hex = "0.4"
-hmac = "0.12"
+hmac = "0.13"
 libc = "0.2"
 percent-encoding = "2.3"
-rand = "0.9"
+rand = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha2 = "0.10"
-tokio = { version = "1.47", features = ["fs", "io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+sha2 = "0.11"
+tokio = { version = "1.53", features = ["fs", "io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 url = "2.5"
-uuid = { version = "1.18", features = ["v4"] }
+uuid = { version = "1.24", features = ["v4"] }
 
 [dev-dependencies]
-tempfile = "3.21"
+tempfile = "3.27"

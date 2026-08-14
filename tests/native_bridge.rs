@@ -9,7 +9,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use holvi_agent_bridge::bridge::{
     Action, AuditListParams, BridgeConfig, EmptyParams, NativeMessageDecoder, SignedBridgeRequest,
     encode_native_message, sign_request,

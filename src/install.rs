@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
-use rand::RngCore;
+use rand::Rng;
 use serde::Serialize;
 use serde_json::json;
 

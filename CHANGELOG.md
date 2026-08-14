@@ -7,6 +7,8 @@ description: Release notes for Holvi Agent Bridge.
 
 - Reinstall interactively with settings and capability selections remembered
   from the existing private configuration.
+- Update Rust and extension tooling dependencies to current releases and require
+  Rust 1.88 or later for source builds.
 - Include ledger, available, and blocked balances in `accounts list` output.
 
 ## v0.1.2 (2026-08-12)

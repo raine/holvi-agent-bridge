@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use base64::Engine;
-use rand::RngCore;
+use rand::Rng;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 

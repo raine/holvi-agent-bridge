@@ -146,10 +146,10 @@ impl RuntimeState {
     }
 
     fn action_finished(&mut self, id: &str, result: Result<()>) {
-        if let Err(error) = result {
-            if self.active.as_ref().is_some_and(|active| active.id == id) {
-                self.finish(json!({"ok": false, "error": error.to_string()}));
-            }
+        if let Err(error) = result
+            && self.active.as_ref().is_some_and(|active| active.id == id)
+        {
+            self.finish(json!({"ok": false, "error": error.to_string()}));
         }
     }
 
@@ -237,11 +237,12 @@ pub async fn run(config: BridgeConfig, socket: LocalSocket) -> Result<()> {
     let mut cleanup_failure = None;
     runtime.actions.abort_all();
     while let Some(result) = runtime.actions.join_next().await {
-        if let Err(error) = result {
-            if !error.is_cancelled() && cleanup_failure.is_none() {
-                cleanup_failure =
-                    Some(anyhow!(error).context("Action dispatch task failed during shutdown."));
-            }
+        if let Err(error) = result
+            && !error.is_cancelled()
+            && cleanup_failure.is_none()
+        {
+            cleanup_failure =
+                Some(anyhow!(error).context("Action dispatch task failed during shutdown."));
         }
     }
 
@@ -254,17 +255,15 @@ pub async fn run(config: BridgeConfig, socket: LocalSocket) -> Result<()> {
             cleanup_failure.get_or_insert(error);
         }
     }
-    if !acceptor_exited {
-        if let Err(error) = task_result(acceptor.await, "Local socket acceptor task") {
-            cleanup_failure.get_or_insert(error);
-        }
+    if !acceptor_exited
+        && let Err(error) = task_result(acceptor.await, "Local socket acceptor task")
+    {
+        cleanup_failure.get_or_insert(error);
     }
 
     drop(runtime);
-    if !output_exited {
-        if let Err(error) = task_result(writer.await, "Native output task") {
-            cleanup_failure.get_or_insert(error);
-        }
+    if !output_exited && let Err(error) = task_result(writer.await, "Native output task") {
+        cleanup_failure.get_or_insert(error);
     }
 
     let result = match exit {

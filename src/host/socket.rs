@@ -31,11 +31,12 @@ struct SocketGuard {
 
 impl Drop for SocketGuard {
     fn drop(&mut self) {
-        if let Ok(metadata) = fs::symlink_metadata(&self.path) {
-            if is_socket(&metadata) && metadata.dev() == self.device && metadata.ino() == self.inode
-            {
-                let _ = fs::remove_file(&self.path);
-            }
+        if let Ok(metadata) = fs::symlink_metadata(&self.path)
+            && is_socket(&metadata)
+            && metadata.dev() == self.device
+            && metadata.ino() == self.inode
+        {
+            let _ = fs::remove_file(&self.path);
         }
     }
 }
@@ -107,10 +108,8 @@ impl LocalSocket {
                 _ = &mut deadline => {
                     connections.abort_all();
                     while let Some(result) = connections.join_next().await {
-                        if let Err(error) = result {
-                            if !error.is_cancelled() {
-                                return Err(error).context("Local bridge connection task failed.");
-                            }
+                        if let Err(error) = result && !error.is_cancelled() {
+                            return Err(error).context("Local bridge connection task failed.");
                         }
                     }
                 }

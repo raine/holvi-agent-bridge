@@ -59,7 +59,7 @@ Runtime requirements:
   support
 - a Holvi account with access to the target company
 
-Building from source requires Rust 1.85 or later. Extension development also
+Building from source requires Rust 1.88 or later. Extension development also
 uses Bun and the dependencies in `package.json`.
 
 ## Getting started
