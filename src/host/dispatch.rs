@@ -217,7 +217,6 @@ mod tests {
             receipt_roots: vec![PathBuf::from("/tmp")],
             export_roots: vec![],
             max_file_bytes: 1024,
-            max_download_bytes: 1024 * 1024,
             hmac_secret: "a".repeat(64),
         }
     }

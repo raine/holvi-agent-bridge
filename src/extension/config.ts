@@ -6,7 +6,6 @@ interface HolviBridgeStaticConfig {
   nativeProtocolVersion: number;
   extensionVersion: string;
   maxFileBytes: number;
-  maxDownloadBytes: number;
   maxTransactionPages: number;
   maxTransactionResults: number;
 }
@@ -21,7 +20,6 @@ _HOLVI_AGENT_BRIDGE_STATIC_CONFIG = Object.freeze({
   nativeProtocolVersion: 2,
   extensionVersion: "0.1.3",
   maxFileBytes: 26214400,
-  maxDownloadBytes: 1073741824,
   maxTransactionPages: 200,
   maxTransactionResults: 10_000,
 });

@@ -28,10 +28,10 @@ use crate::install::{HostRestartStatus, InstallOptions, InstallResult, install_b
 use crate::protocol::{
     Action, AttachmentDeleteParams, AttachmentDownloadParams, AuditListParams,
     BOOKKEEPING_DESCRIPTION_MAX_BYTES, BookkeepingDescriptionParams, BookkeepingListParams,
-    CommentCreateParams, DEFAULT_MAX_DOWNLOAD_BYTES, DebtParams, EmptyParams, HOST_BUILD_VERSION,
-    MAX_COMMENT_CONTENT_BYTES, MAX_SOCKET_RESPONSE_BYTES, NATIVE_PROTOCOL_VERSION,
-    ReportExportParams, ReportJobCreateParams, ReportJobDownloadParams, ReportJobListParams,
-    ReportJobParams, TransactionParams, UploadParams, sign_request, validate_attachment_code,
+    CommentCreateParams, DebtParams, EmptyParams, HOST_BUILD_VERSION, MAX_COMMENT_CONTENT_BYTES,
+    MAX_SOCKET_RESPONSE_BYTES, NATIVE_PROTOCOL_VERSION, ReportExportParams, ReportJobCreateParams,
+    ReportJobDownloadParams, ReportJobListParams, ReportJobParams, TransactionParams, UploadParams,
+    sign_request, validate_attachment_code,
 };
 use crate::receipt_sandbox::resolve_receipt_file;
 use crate::skill::{self, CodingAgentArg};
@@ -211,9 +211,6 @@ struct InstallArgs {
     /// Allow exported files below this directory (repeatable)
     #[arg(long = "export-root")]
     export_roots: Vec<PathBuf>,
-    /// Maximum bytes accepted for one download
-    #[arg(long)]
-    max_download_bytes: Option<u64>,
     /// Print machine-readable JSON
     #[arg(long)]
     json: bool,
@@ -223,7 +220,6 @@ trait InstallPrompts {
     fn required_text(&mut self, label: &str, default: Option<&str>) -> Result<String>;
     fn capabilities(&mut self, defaults: &[String]) -> Result<Vec<String>>;
     fn paths(&mut self, label: &str, defaults: &[PathBuf], required: bool) -> Result<Vec<PathBuf>>;
-    fn positive_u64(&mut self, label: &str, default: u64) -> Result<u64>;
 }
 
 struct TerminalInstallPrompts {
@@ -294,14 +290,6 @@ impl InstallPrompts for TerminalInstallPrompts {
             }
             eprintln!("At least one folder is required by the selected capabilities.");
         }
-    }
-
-    fn positive_u64(&mut self, label: &str, default: u64) -> Result<u64> {
-        Input::<u64>::with_theme(&self.theme)
-            .with_prompt(label)
-            .default(default)
-            .interact_text()
-            .with_context(|| format!("Unable to read {label}."))
     }
 }
 
@@ -375,17 +363,6 @@ fn interactive_install_options<P: InstallPrompts>(
     } else {
         args.export_roots
     };
-    let max_download_default = previous
-        .map(|config| config.max_download_bytes)
-        .unwrap_or(DEFAULT_MAX_DOWNLOAD_BYTES);
-    let max_download_bytes = match args.max_download_bytes {
-        Some(value) => value,
-        None => prompts.positive_u64("Maximum download bytes", max_download_default)?,
-    };
-    ensure!(
-        max_download_bytes > 0,
-        "Maximum download bytes must be positive."
-    );
 
     Ok(InstallOptions {
         group_url,
@@ -393,7 +370,6 @@ fn interactive_install_options<P: InstallPrompts>(
         capabilities,
         receipt_roots,
         export_roots,
-        max_download_bytes,
     })
 }
 
@@ -409,9 +385,6 @@ fn install_options(args: InstallArgs) -> Result<(InstallOptions, bool)> {
                 capabilities: args.capabilities,
                 receipt_roots: args.receipt_roots,
                 export_roots: args.export_roots,
-                max_download_bytes: args
-                    .max_download_bytes
-                    .unwrap_or(DEFAULT_MAX_DOWNLOAD_BYTES),
             },
             json_output,
         ));
@@ -2249,7 +2222,6 @@ mod tests {
             receipt_roots: vec![],
             export_roots: vec![],
             max_file_bytes: 1024,
-            max_download_bytes: 1024 * 1024,
             hmac_secret: "a".repeat(64),
         };
         let mut doctor = DoctorResult {
@@ -2453,7 +2425,6 @@ mod tests {
         assert!(args.group_url.is_none());
         assert!(args.account.is_none());
         assert!(args.capabilities.is_empty());
-        assert!(args.max_download_bytes.is_none());
     }
 
     #[derive(Default)]
@@ -2479,10 +2450,6 @@ mod tests {
         ) -> Result<Vec<PathBuf>> {
             Ok(defaults.to_vec())
         }
-
-        fn positive_u64(&mut self, _label: &str, default: u64) -> Result<u64> {
-            Ok(default)
-        }
     }
 
     #[test]
@@ -2495,7 +2462,6 @@ mod tests {
             receipt_roots: vec![PathBuf::from("/receipts")],
             export_roots: vec![PathBuf::from("/exports")],
             max_file_bytes: 25 * 1024 * 1024,
-            max_download_bytes: 512 * 1024 * 1024,
             hmac_secret: "a".repeat(64),
         };
         let args = InstallArgs {
@@ -2504,7 +2470,6 @@ mod tests {
             capabilities: Vec::new(),
             receipt_roots: Vec::new(),
             export_roots: Vec::new(),
-            max_download_bytes: None,
             json: false,
         };
         let mut prompts = RememberingPrompts::default();
@@ -2519,7 +2484,6 @@ mod tests {
         assert_eq!(options.capabilities, previous.capabilities);
         assert_eq!(options.receipt_roots, previous.receipt_roots);
         assert_eq!(options.export_roots, previous.export_roots);
-        assert_eq!(options.max_download_bytes, previous.max_download_bytes);
         assert_eq!(prompts.capability_defaults, previous.capabilities);
     }
 

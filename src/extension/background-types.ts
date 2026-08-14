@@ -6,7 +6,6 @@ export interface StaticBridgeConfig {
   nativeProtocolVersion: number;
   extensionVersion: string;
   maxFileBytes: number;
-  maxDownloadBytes?: number;
   maxTransactionPages: number;
   maxTransactionResults: number;
 }
@@ -22,7 +21,6 @@ export interface RuntimeBridgeConfig {
   paymentAccountUuid: string;
   capabilities: string[];
   maxFileBytes: number;
-  maxDownloadBytes?: number;
 }
 
 export interface Auth {

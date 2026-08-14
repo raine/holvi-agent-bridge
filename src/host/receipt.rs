@@ -88,7 +88,6 @@ mod tests {
             receipt_roots: vec![approved],
             export_roots: vec![],
             max_file_bytes: original.len() as u64,
-            max_download_bytes: 1024 * 1024,
             hmac_secret: "a".repeat(64),
         };
         let (sender, mut receiver) = mpsc::channel(1);

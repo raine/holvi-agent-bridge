@@ -43,7 +43,6 @@ impl HostProcess {
             receipt_roots: vec![],
             export_roots: vec![],
             max_file_bytes: 1024,
-            max_download_bytes: 1024 * 1024,
             hmac_secret: SECRET.into(),
         };
         fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();

@@ -16,7 +16,8 @@ use crate::config::BridgeConfig;
 use crate::protocol::{
     Action, DOWNLOAD_CHUNK_MESSAGE, DOWNLOAD_END_MESSAGE, DOWNLOAD_START_MESSAGE,
     HOST_BUILD_VERSION, HOST_READY_MESSAGE, HOST_REJECTED_MESSAGE, HOST_RESTART_MESSAGE,
-    NATIVE_PROTOCOL_VERSION, RESULT_MESSAGE, TAB_READY_MESSAGE, TAB_UNAVAILABLE_MESSAGE,
+    MAX_DOWNLOAD_BYTES, NATIVE_PROTOCOL_VERSION, RESULT_MESSAGE, TAB_READY_MESSAGE,
+    TAB_UNAVAILABLE_MESSAGE,
 };
 
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -394,7 +395,7 @@ impl HostRuntime {
             Some(output) => match DownloadReceiver::prepare(
                 output,
                 &self.config.export_roots,
-                self.config.max_download_bytes,
+                MAX_DOWNLOAD_BYTES,
             ) {
                 Ok(receiver) => Some(receiver),
                 Err(error) => {

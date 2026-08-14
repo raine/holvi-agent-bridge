@@ -69,7 +69,7 @@ impl DownloadReceiver {
         let expected_size = message.get("expectedSize").and_then(Value::as_u64);
         ensure!(
             expected_size.is_none_or(|size| size <= self.max_bytes),
-            "Download exceeds the configured size limit."
+            "Download exceeds the maximum size."
         );
         let final_path = self.directory.join(file_name);
         ensure!(!final_path.exists(), "Export destination already exists.");

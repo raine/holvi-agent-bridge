@@ -42,7 +42,6 @@ pub struct BridgeConfig {
     pub receipt_roots: Vec<PathBuf>,
     pub export_roots: Vec<PathBuf>,
     pub max_file_bytes: u64,
-    pub max_download_bytes: u64,
     pub hmac_secret: String,
 }
 
@@ -54,7 +53,6 @@ pub struct PublicBridgeConfig<'a> {
     payment_account_uuid: &'a str,
     capabilities: &'a [String],
     max_file_bytes: u64,
-    max_download_bytes: u64,
 }
 
 impl BridgeConfig {
@@ -111,10 +109,6 @@ impl BridgeConfig {
             "Download capabilities require an approved export folder."
         );
         ensure!(
-            self.max_download_bytes > 0,
-            "Holvi Agent Bridge config has an invalid download-size limit."
-        );
-        ensure!(
             (MIN_FILE_BYTES..=DEFAULT_MAX_FILE_BYTES).contains(&self.max_file_bytes),
             "Holvi Agent Bridge config has an invalid file-size limit."
         );
@@ -128,7 +122,6 @@ impl BridgeConfig {
             payment_account_uuid: &self.payment_account_uuid,
             capabilities: &self.capabilities,
             max_file_bytes: self.max_file_bytes,
-            max_download_bytes: self.max_download_bytes,
         }
     }
 }
@@ -243,7 +236,6 @@ mod tests {
             receipt_roots: roots,
             export_roots: vec![],
             max_file_bytes: 1024 * 1024,
-            max_download_bytes: crate::protocol::DEFAULT_MAX_DOWNLOAD_BYTES,
             hmac_secret: "b".repeat(64),
         }
     }

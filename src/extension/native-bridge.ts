@@ -1,7 +1,7 @@
 import type { NativeMessage, StaticBridgeConfig } from "./background-types.js";
 import { CommandService } from "./commands.js";
 import { HolviApi } from "./holvi-api.js";
-import { requiredCapabilities } from "./policy.js";
+import { maximumDownloadBytes, requiredCapabilities } from "./policy.js";
 import { BridgeSession } from "./session.js";
 import { TabRegistry } from "./tab-registry.js";
 import {
@@ -202,8 +202,8 @@ export class NativeBridge {
       });
       index += 1;
       size += bytes.length;
-      if (size > (this.session.config.maxDownloadBytes ?? 1073741824))
-        throw new Error("Download exceeds the configured size limit.");
+      if (size > maximumDownloadBytes)
+        throw new Error("Download exceeds the maximum size.");
     };
     while (true) {
       const { done, value } = await reader.read();

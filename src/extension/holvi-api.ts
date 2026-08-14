@@ -20,6 +20,7 @@ import {
   projectTransactionPaymentMetadata,
 } from "./projections.js";
 import type { Auth, StaticBridgeConfig } from "./background-types.js";
+import { maximumDownloadBytes } from "./policy.js";
 import { BridgeSession, validateUuid } from "./session.js";
 
 export const reportTypes = Object.freeze([
@@ -691,10 +692,9 @@ export class HolviApi {
     if (
       contentLength &&
       (!/^\d+$/.test(contentLength) ||
-        Number(contentLength) >
-          (this.session.config.maxDownloadBytes ?? 1073741824))
+        Number(contentLength) > maximumDownloadBytes)
     )
-      throw new Error("Download exceeds the configured size limit.");
+      throw new Error("Download exceeds the maximum size.");
     const contentType =
       response.headers.get("content-type")?.split(";", 1)[0]?.trim() || "";
     const allowedMimeTypes = new Set([

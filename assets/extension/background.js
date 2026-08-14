@@ -680,6 +680,7 @@
 
   // src/extension/policy.ts
   var minimumFileBytes = 1;
+  var maximumDownloadBytes = 1024 * 1024 * 1024;
   var actionCapabilities = {
     doctor: [],
     "transactions.list": ["transactions.read"],
@@ -742,9 +743,7 @@
     const config = value;
     const groupParts = (config.groupPathSegment || "").match(/^([^/+]+)\+([^/]+)$/);
     const groupPoolHandle = groupParts?.[1] || "";
-    const configuredMaximum = staticConfig.maxDownloadBytes ?? 1073741824;
-    const maxDownloadBytes = config.maxDownloadBytes ?? configuredMaximum;
-    if (!groupParts || !poolHandlePattern.test(config.poolHandle || "") || groupPoolHandle !== config.poolHandle || !uuidPattern2.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < minimumFileBytes || (config.maxFileBytes || 0) > staticConfig.maxFileBytes || !Number.isSafeInteger(maxDownloadBytes) || maxDownloadBytes < 1 || maxDownloadBytes > configuredMaximum) {
+    if (!groupParts || !poolHandlePattern.test(config.poolHandle || "") || groupPoolHandle !== config.poolHandle || !uuidPattern2.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < minimumFileBytes || (config.maxFileBytes || 0) > staticConfig.maxFileBytes) {
       throw new Error("The native host supplied an invalid Holvi account boundary.");
     }
     return config;
@@ -1558,8 +1557,8 @@
       if (!response.ok || !origins.includes(finalUrl.origin) || !finalUrl.pathname.startsWith(pathPrefix) || finalUrl.username || finalUrl.password || finalUrl.hash)
         throw new Error("Holvi download response failed validation.");
       const contentLength = response.headers.get("content-length");
-      if (contentLength && (!/^\d+$/.test(contentLength) || Number(contentLength) > (this.session.config.maxDownloadBytes ?? 1073741824)))
-        throw new Error("Download exceeds the configured size limit.");
+      if (contentLength && (!/^\d+$/.test(contentLength) || Number(contentLength) > maximumDownloadBytes))
+        throw new Error("Download exceeds the maximum size.");
       const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim() || "";
       const allowedMimeTypes = new Set([
         "application/pdf",
@@ -2285,8 +2284,8 @@
         });
         index += 1;
         size += bytes.length;
-        if (size > (this.session.config.maxDownloadBytes ?? 1073741824))
-          throw new Error("Download exceeds the configured size limit.");
+        if (size > maximumDownloadBytes)
+          throw new Error("Download exceeds the maximum size.");
       };
       while (true) {
         const { done, value } = await reader.read();

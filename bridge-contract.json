@@ -52,7 +52,7 @@
     "max": 26214400,
     "uploadChunk": 491520,
     "downloadChunk": 491520,
-    "defaultDownloadMax": 1073741824
+    "downloadMax": 1073741824
   },
   "downloadMimeTypes": [
     "application/pdf",

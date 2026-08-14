@@ -349,7 +349,7 @@ Configure at least one existing, user-owned export directory with
 `holvi install --export-root PATH`. Receipt roots authorize files flowing into
 Holvi. Export roots independently authorize files flowing to local storage.
 Downloads refuse symlinks, paths outside approved roots, destination collisions,
-and files above `--max-download-bytes`.
+and files above the one GiB safety ceiling.
 
 ```sh
 holvi accounts list --json
@@ -415,9 +415,9 @@ holvi audit list --from 2022-01-01 --to 2026-12-31 \
 
 Writes the private config, installs the bundled extension files, and registers
 the Chrome Native Messaging host. Run `holvi install` in a terminal for an
-interactive setup. Existing group, account, capabilities, approved folders, and
-download-size limit appear as defaults, so pressing Enter through the prompts
-reinstalls the previous configuration.
+interactive setup. Existing group, account, capabilities, and approved folders
+appear as defaults, so pressing Enter through the prompts reinstalls the previous
+configuration.
 
 ```sh
 holvi install
@@ -436,7 +436,6 @@ holvi install \
   [--capability CAPABILITY] \
   [--receipt-root /absolute/path] \
   [--export-root /absolute/path] \
-  [--max-download-bytes BYTES] \
   [--json]
 ```
 
@@ -447,7 +446,6 @@ holvi install \
 | `--capability CAPABILITY`    | required         | Capability to enable, repeatable                    |
 | `--receipt-root PATH`        | optional         | Approved absolute attachment directory, repeatable  |
 | `--export-root PATH`         | optional         | Approved absolute export directory, repeatable      |
-| `--max-download-bytes BYTES` | optional         | Maximum bytes accepted for one download             |
 | `--json`                     | optional         | Print the installation result as JSON               |
 
 Interactive capability selection uses arrow keys to move, Space to toggle, and

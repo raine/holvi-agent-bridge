@@ -1,4 +1,5 @@
 export const minimumFileBytes = 1;
+export const maximumDownloadBytes = 1024 * 1024 * 1024;
 
 export const actionCapabilities = {
   doctor: [],
