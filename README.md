@@ -263,7 +263,10 @@ Use `holvi config edit` to open the private configuration in your editor.
 - Writes require an explicit confirmation and are verified against Holvi.
 - Attachment deletion has a separate capability because it is irreversible.
 
-## Related project
+## Related projects
+
+[Holvi Session Keeper](https://github.com/raine/holvi-session-keeper) can keep
+an explicitly enabled Holvi session active during longer agent workflows.
 
 For companies using Lemonaid, see
 [Lemonaid Agent Bridge](https://github.com/raine/lemonaid-agent-bridge).
