@@ -1811,43 +1811,18 @@ fn human_label(key: &str) -> String {
     output
 }
 
-fn mask_iban(value: &str) -> String {
-    let compact = value
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect::<String>();
-    if compact.chars().count() < 8 {
-        return "••••".to_owned();
-    }
-    let first = compact.chars().take(4).collect::<String>();
-    let last = compact
-        .chars()
-        .rev()
-        .take(4)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<String>();
-    format!("{first}••••{last}")
-}
-
-fn human_scalar(key: Option<&str>, value: &Value) -> String {
+fn human_scalar(value: &Value) -> String {
     let rendered = match value {
         Value::Null => "unavailable".to_owned(),
         Value::Bool(value) => value.to_string(),
         Value::Number(value) => value.to_string(),
-        Value::String(value)
-            if key.is_some_and(|key| key.to_ascii_lowercase().contains("iban")) =>
-        {
-            mask_iban(value)
-        }
         Value::String(value) => value.clone(),
         Value::Array(_) | Value::Object(_) => unreachable!("compound value rendered as scalar"),
     };
     sanitize_terminal_text(&rendered)
 }
 
-fn write_human_value(output: &mut String, value: &Value, indent: usize, key: Option<&str>) {
+fn write_human_value(output: &mut String, value: &Value, indent: usize) {
     let padding = " ".repeat(indent);
     match value {
         Value::Object(fields) => {
@@ -1859,29 +1834,24 @@ fn write_human_value(output: &mut String, value: &Value, indent: usize, key: Opt
                 match item {
                     Value::Array(items) => {
                         writeln!(output, "{padding}{label} ({}):", items.len()).unwrap();
-                        write_human_array(output, items, indent + 2, Some(field));
+                        write_human_array(output, items, indent + 2);
                     }
                     Value::Object(_) => {
                         writeln!(output, "{padding}{label}:").unwrap();
-                        write_human_value(output, item, indent + 2, Some(field));
+                        write_human_value(output, item, indent + 2);
                     }
                     _ => {
-                        writeln!(
-                            output,
-                            "{padding}{label}: {}",
-                            human_scalar(Some(field), item)
-                        )
-                        .unwrap();
+                        writeln!(output, "{padding}{label}: {}", human_scalar(item)).unwrap();
                     }
                 }
             }
         }
-        Value::Array(items) => write_human_array(output, items, indent, key),
-        _ => writeln!(output, "{padding}{}", human_scalar(key, value)).unwrap(),
+        Value::Array(items) => write_human_array(output, items, indent),
+        _ => writeln!(output, "{padding}{}", human_scalar(value)).unwrap(),
     }
 }
 
-fn write_human_array(output: &mut String, items: &[Value], indent: usize, key: Option<&str>) {
+fn write_human_array(output: &mut String, items: &[Value], indent: usize) {
     let padding = " ".repeat(indent);
     if items.is_empty() {
         writeln!(output, "{padding}(none)").unwrap();
@@ -1891,9 +1861,9 @@ fn write_human_array(output: &mut String, items: &[Value], indent: usize, key: O
         match item {
             Value::Object(_) | Value::Array(_) => {
                 writeln!(output, "{padding}-").unwrap();
-                write_human_value(output, item, indent + 2, key);
+                write_human_value(output, item, indent + 2);
             }
-            _ => writeln!(output, "{padding}- {}", human_scalar(key, item)).unwrap(),
+            _ => writeln!(output, "{padding}- {}", human_scalar(item)).unwrap(),
         }
     }
 }
@@ -1902,7 +1872,7 @@ fn format_data(title: &str, value: &Value, renderer: ReportRenderer) -> String {
     let mut output = String::new();
     renderer.write_title(&mut output, &sanitize_terminal_text(title));
     output.push('\n');
-    write_human_value(&mut output, value, 0, None);
+    write_human_value(&mut output, value, 0);
     output
 }
 
@@ -2417,8 +2387,7 @@ mod tests {
 
         assert!(output.starts_with("holvi transactions list\n\ncount: 1\nresults (1):\n"));
         assert!(output.contains("counterparty: Merchant��[31mspoof"));
-        assert!(output.contains("iban: FI21••••0785"));
-        assert!(!output.contains("FI2112345600000785"));
+        assert!(output.contains("iban: FI2112345600000785"));
         assert!(
             !output
                 .chars()
@@ -2428,7 +2397,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_json_preserves_sensitive_and_untrusted_values() {
+    fn explicit_json_preserves_exact_and_untrusted_values() {
         let value = json!({
             "recipient": {"iban": "FI2112345600000785"},
             "comment": "line one\n\u{1b}[31mline two"

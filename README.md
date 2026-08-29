@@ -118,10 +118,9 @@ approved folders.
 ## Output modes
 
 Data commands print concise, labeled human-readable output by default. This
-output is safe to display in a terminal, and sensitive identifiers such as IBANs
-are masked. Pass `--json` to a data command for its stable structured response,
-including documented full values needed by machine integrations. Treat explicit
-JSON output as sensitive financial data.
+output sanitizes untrusted terminal text while preserving documented values.
+Pass `--json` to a data command for its stable structured response and exact
+field types needed by machine integrations.
 
 Commands whose result is intentionally plain stay plain. In particular,
 `config path` prints a path, `skill` prints the installed skill text, and file
@@ -215,9 +214,8 @@ holvi payments send \
 ```
 
 The bridge reports success only after mobile approval and an authoritative debt
-read proves a confirmed payment state. Recipient details and full IBAN values in
-`--json` output are sensitive financial data. Inspect Holvi before retrying any
-failed or ambiguous payment operation.
+read proves a confirmed payment state. Inspect Holvi before retrying any failed
+or ambiguous payment operation.
 
 ## Download files
 

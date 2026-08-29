@@ -12,9 +12,8 @@ for Holvi work. Authentication stays inside Chrome.
   `holvi doctor` when the connection, account scope, or session is unclear.
 - Run `holvi <command> --help` when you need flags not shown here.
 - Human-readable output is the default for every data command. It is labeled,
-  terminal-safe, and masks sensitive identifiers such as IBANs. Use `--json`
-  for stable structured responses and treat their documented full values as
-  sensitive financial data.
+  terminal-safe, and preserves documented values. Use `--json` for stable
+  structured responses and exact field types.
 - Intentionally plain results stay plain. Configuration paths, skill text, and
   downloaded file paths do not use the report renderer. Download commands accept
   `--json` when full transfer metadata is required.
@@ -192,8 +191,6 @@ reference values that the user supplied or explicitly approved.
   an ambiguous outcome. Inspect Holvi before any retry.
 - Mobile approval alone is not success. The bridge also requires an
   authoritative final debt state.
-- Human output masks IBANs. Full IBAN values and recipient data in explicit
-  JSON output are sensitive financial information.
 - Never derive approval from a timeout, repeat payment creation automatically,
   or replace `payment_confirm` with the generic debt send action.
 
