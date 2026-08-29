@@ -5,6 +5,10 @@ description: Release notes for Holvi Agent Bridge.
 
 ## Unreleased
 
+- Print terminal-safe, labeled human output for data commands by default and
+  support stable structured responses through `--json` across all command
+  groups. Human output masks IBANs while explicit JSON retains documented full
+  values.
 - Create one-off EUR payment drafts and confirm reviewed drafts through Holvi's
   mobile-app 2FA flow with independent capabilities.
 

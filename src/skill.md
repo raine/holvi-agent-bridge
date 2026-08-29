@@ -11,8 +11,13 @@ for Holvi work. Authentication stays inside Chrome.
 - Keep the configured Holvi group open and signed in in Chrome. Run
   `holvi doctor` when the connection, account scope, or session is unclear.
 - Run `holvi <command> --help` when you need flags not shown here.
-- Human-readable output is the default for `capabilities`, `doctor`, and a
-  successful `install`. Use `--json` when a structured result is required.
+- Human-readable output is the default for every data command. It is labeled,
+  terminal-safe, and masks sensitive identifiers such as IBANs. Use `--json`
+  for stable structured responses and treat their documented full values as
+  sensitive financial data.
+- Intentionally plain results stay plain. Configuration paths, skill text, and
+  downloaded file paths do not use the report renderer. Download commands accept
+  `--json` when full transfer metadata is required.
 - Do not run `holvi install` or change capabilities, account scope, or receipt
   roots unless the user explicitly asks for that configuration change.
 
@@ -90,9 +95,9 @@ holvi accounts list --json
 holvi reports types --json
 ```
 
-- Prefer `transactions list --json` when matching records or passing identifiers
-  to a later command. Without `--json`, `transactions list` uses a human-readable
-  table.
+- Prefer `--json` when matching records, preserving exact field types, or
+  passing identifiers to a later command. Without `--json`, every data command
+  uses concise human-readable output.
 - `transactions get` returns separate `paymentUuid` and `debtUuid` values plus
   bounded value-date, booking-date, counterparty, bank-reference, message,
   archive-identifier, card, account, cardholder, exchange-rate, merchant-address,
@@ -185,8 +190,8 @@ reference values that the user supplied or explicitly approved.
   an ambiguous outcome. Inspect Holvi before any retry.
 - Mobile approval alone is not success. The bridge also requires an
   authoritative final debt state.
-- Full IBAN values and recipient data in JSON output are sensitive financial
-  information.
+- Human output masks IBANs. Full IBAN values and recipient data in explicit
+  JSON output are sensitive financial information.
 - Never derive approval from a timeout, repeat payment creation automatically,
   or replace `payment_confirm` with the generic debt send action.
 

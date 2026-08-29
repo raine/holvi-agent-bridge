@@ -115,6 +115,19 @@ holvi config path
 Run `holvi install` again to change the company, account, capabilities, or
 approved folders.
 
+## Output modes
+
+Data commands print concise, labeled human-readable output by default. This
+output is safe to display in a terminal, and sensitive identifiers such as IBANs
+are masked. Pass `--json` to a data command for its stable structured response,
+including documented full values needed by machine integrations. Treat explicit
+JSON output as sensitive financial data.
+
+Commands whose result is intentionally plain stay plain. In particular,
+`config path` prints a path, `skill` prints the installed skill text, and file
+downloads print the saved path. Pass `--json` to a download command when its
+full path, media type, size, and checksum response is needed.
+
 ## Common commands
 
 | Task | Command |
@@ -131,8 +144,9 @@ approved folders.
 For example:
 
 ```sh
-holvi transactions list --from 2026-01-01 --to 2026-01-31 --json
+holvi transactions list --from 2026-01-01 --to 2026-01-31
 holvi transactions get --debt DEBT_UUID
+holvi transactions get --debt DEBT_UUID --json
 ```
 
 Date ranges are inclusive and use `YYYY-MM-DD`. Use debt, item, attachment, and
