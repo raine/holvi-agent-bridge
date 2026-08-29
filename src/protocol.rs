@@ -27,6 +27,10 @@ pub const DOWNLOAD_CHUNK_BYTES: usize = 491_520;
 pub const MAX_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 pub const BOOKKEEPING_DESCRIPTION_MAX_BYTES: usize = 4096;
 pub const MAX_COMMENT_CONTENT_BYTES: usize = 16 * 1024;
+pub const MAX_PAYMENT_RECIPIENT_BYTES: usize = 256;
+pub const MAX_PAYMENT_REFERENCE_BYTES: usize = 256;
+pub const MAX_PAYMENT_BIC_BYTES: usize = 11;
+pub const PAYMENT_CONFIRMATION_TIMEOUT_MS: u64 = 300_000;
 pub const HOST_READY_MESSAGE: &str = "host_ready";
 pub const HOST_RESTART_MESSAGE: &str = "host_restart";
 pub const COMMAND_MESSAGE: &str = "command";
@@ -230,6 +234,37 @@ pub struct AuditListParams {
     pub max_pages: u16,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
+pub enum PaymentReference {
+    Message(String),
+    Rf(String),
+    Finnish(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaymentCreateParams {
+    pub payment_account_uuid: String,
+    pub recipient_name: String,
+    pub iban: String,
+    pub bic: Option<String>,
+    pub amount: String,
+    pub currency: String,
+    pub reference: PaymentReference,
+    pub accept_payee_warning: bool,
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaymentSendParams {
+    pub debt_uuid: String,
+    pub review_digest: Option<String>,
+    pub accept_payee_warning: bool,
+    pub confirmed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     HostRestart(EmptyParams),
@@ -256,6 +291,8 @@ pub enum Action {
     BookkeepingSetDescription(BookkeepingDescriptionParams),
     AuditTypes(EmptyParams),
     AuditList(AuditListParams),
+    PaymentCreate(PaymentCreateParams),
+    PaymentSend(PaymentSendParams),
 }
 
 impl Action {
@@ -294,6 +331,8 @@ impl Action {
             Self::BookkeepingSetDescription(_) => "bookkeeping.set-description",
             Self::AuditTypes(_) => "audit.types",
             Self::AuditList(_) => "audit.list",
+            Self::PaymentCreate(_) => "payments.create",
+            Self::PaymentSend(_) => "payments.send",
         }
     }
 
@@ -323,6 +362,8 @@ impl Action {
             Self::BookkeepingList(params) => serde_json::to_value(params),
             Self::BookkeepingSetDescription(params) => serde_json::to_value(params),
             Self::AuditList(params) => serde_json::to_value(params),
+            Self::PaymentCreate(params) => serde_json::to_value(params),
+            Self::PaymentSend(params) => serde_json::to_value(params),
         }
         .expect("action parameters serialize")
     }
@@ -488,6 +529,40 @@ impl Action {
                 );
                 Self::AuditList(params)
             }
+            "payments.create" => {
+                let mut params: PaymentCreateParams = decode(params)?;
+                validate_uuid(&params.payment_account_uuid, "Payment account")?;
+                params.recipient_name = params.recipient_name.trim().to_owned();
+                ensure!(
+                    !params.recipient_name.is_empty()
+                        && params.recipient_name.len() <= MAX_PAYMENT_RECIPIENT_BYTES,
+                    "Recipient name must be a nonempty bounded string."
+                );
+                params.iban = normalize_and_validate_iban(&params.iban)?;
+                if let Some(bic) = &mut params.bic {
+                    *bic = bic.trim().to_ascii_uppercase();
+                    validate_bic(bic)?;
+                }
+                params.amount = normalize_payment_amount(&params.amount)?;
+                ensure!(params.currency == "EUR", "Payment currency must be EUR.");
+                validate_payment_reference(&mut params.reference)?;
+                Self::PaymentCreate(params)
+            }
+            "payments.send" => {
+                let params: PaymentSendParams = decode(params)?;
+                validate_uuid(&params.debt_uuid, "Debt")?;
+                if let Some(digest) = &params.review_digest {
+                    ensure!(
+                        is_lower_hex(digest, 64),
+                        "Review digest must be lowercase SHA-256 hex."
+                    );
+                }
+                ensure!(
+                    !params.confirmed || params.review_digest.is_some(),
+                    "Payment confirmation requires the review digest."
+                );
+                Self::PaymentSend(params)
+            }
             _ => bail!("Unsupported local bridge action."),
         };
         Ok(action)
@@ -589,6 +664,119 @@ fn validate_date(value: &str) -> Result<()> {
             && value.as_bytes().get(7) == Some(&b'-')
             && NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok(),
         "Dates must use YYYY-MM-DD calendar dates."
+    );
+    Ok(())
+}
+
+fn mod97(value: &str) -> u32 {
+    value.bytes().fold(0_u32, |remainder, byte| {
+        if byte.is_ascii_digit() {
+            (remainder * 10 + u32::from(byte - b'0')) % 97
+        } else {
+            let number = u32::from(byte - b'A') + 10;
+            ((remainder * 10 + number / 10) * 10 + number % 10) % 97
+        }
+    })
+}
+
+pub fn normalize_and_validate_iban(value: &str) -> Result<String> {
+    let iban = value
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    ensure!(
+        (15..=34).contains(&iban.len())
+            && iban.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            && iban[..2].bytes().all(|byte| byte.is_ascii_alphabetic())
+            && iban[2..4].bytes().all(|byte| byte.is_ascii_digit()),
+        "IBAN has an invalid shape."
+    );
+    let rearranged = format!("{}{}", &iban[4..], &iban[..4]);
+    ensure!(mod97(&rearranged) == 1, "IBAN checksum is invalid.");
+    Ok(iban)
+}
+
+fn validate_bic(value: &str) -> Result<()> {
+    let bytes = value.as_bytes();
+    ensure!(
+        (matches!(bytes.len(), 8) || bytes.len() == MAX_PAYMENT_BIC_BYTES)
+            && bytes[..6].iter().all(u8::is_ascii_alphabetic)
+            && bytes[6..].iter().all(u8::is_ascii_alphanumeric),
+        "BIC must contain 8 or 11 uppercase letters and digits."
+    );
+    Ok(())
+}
+
+pub fn normalize_payment_amount(value: &str) -> Result<String> {
+    let value = value.trim();
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    ensure!(
+        !whole.is_empty()
+            && whole.len() <= 16
+            && whole.bytes().all(|byte| byte.is_ascii_digit())
+            && fraction.len() <= 2
+            && fraction.bytes().all(|byte| byte.is_ascii_digit()),
+        "Payment amount must be a positive EUR decimal with at most two fractional digits."
+    );
+    let whole = whole.trim_start_matches('0');
+    let whole = if whole.is_empty() { "0" } else { whole };
+    let fraction = fraction.trim_end_matches('0');
+    let normalized = if fraction.is_empty() {
+        whole.to_owned()
+    } else {
+        format!("{whole}.{fraction}")
+    };
+    ensure!(normalized != "0", "Payment amount must be positive.");
+    Ok(normalized)
+}
+
+fn validate_payment_reference(reference: &mut PaymentReference) -> Result<()> {
+    let value = match reference {
+        PaymentReference::Message(value) => value,
+        PaymentReference::Rf(value) => {
+            *value = value
+                .chars()
+                .filter(|character| !character.is_ascii_whitespace())
+                .collect::<String>()
+                .to_ascii_uppercase();
+            ensure!(
+                value.starts_with("RF")
+                    && (5..=25).contains(&value.len())
+                    && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                    && mod97(&format!("{}{}", &value[4..], &value[..4])) == 1,
+                "RF reference checksum is invalid."
+            );
+            return Ok(());
+        }
+        PaymentReference::Finnish(value) => {
+            *value = value
+                .chars()
+                .filter(|character| !character.is_ascii_whitespace())
+                .collect();
+            ensure!(
+                (4..=20).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_digit()),
+                "Finnish reference has an invalid shape."
+            );
+            let (body, check) = value.split_at(value.len() - 1);
+            let weights = [7_u32, 3, 1];
+            let sum = body
+                .bytes()
+                .rev()
+                .enumerate()
+                .map(|(index, byte)| u32::from(byte - b'0') * weights[index % 3])
+                .sum::<u32>();
+            ensure!(
+                (10 - sum % 10) % 10 == u32::from(check.as_bytes()[0] - b'0'),
+                "Finnish reference checksum is invalid."
+            );
+            return Ok(());
+        }
+    };
+    *value = value.trim().to_owned();
+    ensure!(
+        !value.is_empty() && value.len() <= MAX_PAYMENT_REFERENCE_BYTES,
+        "Payment reference must be a nonempty bounded string."
     );
     Ok(())
 }
@@ -851,6 +1039,95 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn validates_and_normalizes_payment_actions() {
+        let create = signed_value(
+            "payments.create",
+            json!({
+                "paymentAccountUuid": "11111111-1111-4111-8111-111111111111",
+                "recipientName": " Example Recipient ",
+                "iban": "fi21 1234 5600 0007 85",
+                "bic": "nordeafi",
+                "amount": "00123.40",
+                "currency": "EUR",
+                "reference": {"kind": "message", "value": "Invoice 123"},
+                "acceptPayeeWarning": false,
+                "confirmed": false
+            }),
+        );
+        let clock = create["issuedAt"].as_u64().unwrap();
+        let request = verify_request(SECRET, create, &mut HashMap::new(), clock).unwrap();
+        assert_eq!(
+            request.action,
+            Action::PaymentCreate(PaymentCreateParams {
+                payment_account_uuid: "11111111-1111-4111-8111-111111111111".into(),
+                recipient_name: "Example Recipient".into(),
+                iban: "FI2112345600000785".into(),
+                bic: Some("NORDEAFI".into()),
+                amount: "123.4".into(),
+                currency: "EUR".into(),
+                reference: PaymentReference::Message("Invoice 123".into()),
+                accept_payee_warning: false,
+                confirmed: false,
+            })
+        );
+
+        let send = signed_value(
+            "payments.send",
+            json!({
+                "debtUuid": "22222222-2222-4222-8222-222222222222",
+                "reviewDigest": "a".repeat(64),
+                "acceptPayeeWarning": false,
+                "confirmed": true
+            }),
+        );
+        let clock = send["issuedAt"].as_u64().unwrap();
+        assert!(verify_request(SECRET, send, &mut HashMap::new(), clock).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_payment_boundaries() {
+        for params in [
+            json!({
+                "paymentAccountUuid": "11111111-1111-4111-8111-111111111111",
+                "recipientName": "Example",
+                "iban": "FI2112345600000786",
+                "bic": null,
+                "amount": "1.00",
+                "currency": "EUR",
+                "reference": {"kind": "message", "value": "Invoice"},
+                "acceptPayeeWarning": false,
+                "confirmed": false
+            }),
+            json!({
+                "paymentAccountUuid": "11111111-1111-4111-8111-111111111111",
+                "recipientName": "Example",
+                "iban": "FI2112345600000785",
+                "bic": null,
+                "amount": "0.00",
+                "currency": "EUR",
+                "reference": {"kind": "message", "value": "Invoice"},
+                "acceptPayeeWarning": false,
+                "confirmed": false
+            }),
+        ] {
+            let signed = signed_value("payments.create", params);
+            let clock = signed["issuedAt"].as_u64().unwrap();
+            assert!(verify_request(SECRET, signed, &mut HashMap::new(), clock).is_err());
+        }
+        let send = signed_value(
+            "payments.send",
+            json!({
+                "debtUuid": "22222222-2222-4222-8222-222222222222",
+                "reviewDigest": null,
+                "acceptPayeeWarning": false,
+                "confirmed": true
+            }),
+        );
+        let clock = send["issuedAt"].as_u64().unwrap();
+        assert!(verify_request(SECRET, send, &mut HashMap::new(), clock).is_err());
     }
 
     #[test]

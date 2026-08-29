@@ -3,6 +3,11 @@ title: Changelog
 description: Release notes for Holvi Agent Bridge.
 ---
 
+## Unreleased
+
+- Create one-off EUR payment drafts and confirm reviewed drafts through Holvi's
+  mobile-app 2FA flow with independent capabilities.
+
 ## v0.1.4 (2026-08-14)
 
 - Remove download size limit configuration from installation.

@@ -18,7 +18,7 @@ pub const HOST_NAME: &str = "app.holvi_agent_bridge";
 pub const ACCOUNT_ORIGIN: &str = "https://account.app.holvi.com";
 pub const MIN_FILE_BYTES: u64 = 1;
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
-pub const SUPPORTED_CAPABILITIES: [&str; 11] = [
+pub const SUPPORTED_CAPABILITIES: [&str; 13] = [
     "transactions.read",
     "attachments.write",
     "attachments.delete",
@@ -30,6 +30,8 @@ pub const SUPPORTED_CAPABILITIES: [&str; 11] = [
     "reports.read",
     "reports.generate",
     "accounts.read",
+    "payments.write",
+    "payments.send",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

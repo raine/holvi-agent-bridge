@@ -8,7 +8,7 @@ mod socket;
 #[cfg(test)]
 pub(crate) use receipt::FILE_CHUNK_BYTES;
 #[cfg(test)]
-pub(crate) use runtime::REQUEST_TIMEOUT;
+pub(crate) use runtime::{PAYMENT_CONFIRMATION_TIMEOUT, REQUEST_TIMEOUT};
 
 use anyhow::{Result, ensure};
 use serde_json::Value;

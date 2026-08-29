@@ -98,6 +98,8 @@ Each operation requires its capability to be enabled during setup.
 | `attachments.delete` | Delete one selected attachment |
 | `bookkeeping.write` | Replace one bookkeeping line-item description |
 | `reports.generate` | Create asynchronous report jobs |
+| `payments.write` | Preview and create one-off EUR payment drafts |
+| `payments.send` | Review and confirm payment drafts through mobile-app 2FA |
 
 Some operations combine capabilities. For example, attachment uploads and
 comments also require `transactions.read`, while attachment downloads require
@@ -124,6 +126,7 @@ approved folders.
 | Historical activity | `holvi audit types` or `list` |
 | Reports | `holvi reports types`, `export`, or `jobs` |
 | Attachments | `holvi attachments upload`, `download`, or `delete` |
+| Outgoing payments | `holvi payments create` or `send` |
 
 For example:
 
@@ -165,6 +168,42 @@ The same confirmation pattern applies to comments, bookkeeping description
 changes, report generation, and attachment deletion. Attachment deletion is
 irreversible. Do not retry a failed or ambiguous write without inspecting the
 current Holvi state first.
+
+### Outgoing payments
+
+Payment creation and sending use independent capabilities and confirmations.
+Create a dry-run proposal first:
+
+```sh
+holvi payments create \
+  --account PAYMENT_ACCOUNT_UUID \
+  --recipient-name "Example Recipient" \
+  --iban FI2112345600000785 \
+  --amount 123.45 \
+  --message "Invoice 123"
+```
+
+Repeat it with `--yes` to create one draft. Review that draft before sending:
+
+```sh
+holvi payments send --debt DEBT_UUID
+```
+
+The review returns a SHA-256 digest bound to the authoritative recipient,
+account, amount, currency, reference, payment state, and payee-verification
+result. Confirm that exact review and approve it in the Holvi mobile app:
+
+```sh
+holvi payments send \
+  --debt DEBT_UUID \
+  --review-digest REVIEW_DIGEST \
+  --yes
+```
+
+The bridge reports success only after mobile approval and an authoritative debt
+read proves a confirmed payment state. Recipient details and full IBAN values in
+`--json` output are sensitive financial data. Inspect Holvi before retrying any
+failed or ambiguous payment operation.
 
 ## Download files
 

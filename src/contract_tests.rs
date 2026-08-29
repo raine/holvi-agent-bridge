@@ -6,12 +6,13 @@ use crate::config::{
     ACCOUNT_ORIGIN, DEFAULT_MAX_FILE_BYTES, EXTENSION_ID, EXTENSION_ORIGIN, HOST_NAME,
     MIN_FILE_BYTES,
 };
-use crate::host::{FILE_CHUNK_BYTES, REQUEST_TIMEOUT};
+use crate::host::{FILE_CHUNK_BYTES, PAYMENT_CONFIRMATION_TIMEOUT, REQUEST_TIMEOUT};
 use crate::protocol::{
     AUDIT_LIMIT_MAX, AUDIT_LIMIT_MIN, BOOKKEEPING_DESCRIPTION_MAX_BYTES, DOWNLOAD_CHUNK_BYTES,
     EXTENSION_TO_HOST_MESSAGES, HOST_BUILD_VERSION, HOST_TO_EXTENSION_MESSAGES,
-    MAX_COMMENT_CONTENT_BYTES, MAX_DOWNLOAD_BYTES, NATIVE_PROTOCOL_VERSION, REQUEST_MAX_AGE_MS,
-    SIGNED_REQUEST_VERSION,
+    MAX_COMMENT_CONTENT_BYTES, MAX_DOWNLOAD_BYTES, MAX_PAYMENT_BIC_BYTES,
+    MAX_PAYMENT_RECIPIENT_BYTES, MAX_PAYMENT_REFERENCE_BYTES, NATIVE_PROTOCOL_VERSION,
+    REQUEST_MAX_AGE_MS, SIGNED_REQUEST_VERSION,
 };
 use crate::receipt_sandbox::{MIN_RECEIPT_BYTES, UPLOAD_MIME_TYPES};
 
@@ -75,6 +76,18 @@ fn native_constants_match_the_bridge_contract() {
         MAX_COMMENT_CONTENT_BYTES as u64,
         contract["commentLimits"]["contentBytes"]
     );
+    assert_eq!(
+        MAX_PAYMENT_RECIPIENT_BYTES as u64,
+        contract["paymentLimits"]["recipientNameBytes"]
+    );
+    assert_eq!(
+        MAX_PAYMENT_REFERENCE_BYTES as u64,
+        contract["paymentLimits"]["referenceBytes"]
+    );
+    assert_eq!(
+        MAX_PAYMENT_BIC_BYTES as u64,
+        contract["paymentLimits"]["bicBytes"]
+    );
 
     assert_eq!(
         REQUEST_MAX_AGE_MS,
@@ -83,6 +96,14 @@ fn native_constants_match_the_bridge_contract() {
     assert_eq!(
         REQUEST_TIMEOUT,
         Duration::from_millis(contract["timeoutsMs"]["nativeRequest"].as_u64().unwrap())
+    );
+    assert_eq!(
+        PAYMENT_CONFIRMATION_TIMEOUT,
+        Duration::from_millis(
+            contract["timeoutsMs"]["paymentConfirmation"]
+                .as_u64()
+                .unwrap()
+        )
     );
     assert_eq!(
         HOST_TO_EXTENSION_MESSAGES.to_vec(),

@@ -25,6 +25,8 @@ export const actionCapabilities = {
   "bookkeeping.set-description": ["bookkeeping.write"],
   "audit.types": ["audit.read"],
   "audit.list": ["audit.read"],
+  "payments.create": ["payments.write"],
+  "payments.send": ["payments.send"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type BridgeAction = keyof typeof actionCapabilities;
@@ -56,6 +58,8 @@ export const commandActions = {
   "bookkeeping.set-description": true,
   "audit.types": true,
   "audit.list": true,
+  "payments.create": true,
+  "payments.send": true,
 } as const satisfies Record<CommandAction, true>;
 
 export const supportedCapabilities: ReadonlySet<string> = new Set(

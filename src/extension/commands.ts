@@ -1,4 +1,5 @@
 import type { Auth, NativeMessage } from "./background-types.js";
+import { AuthProxyClient } from "./auth-proxy.js";
 import { AttachmentDeletionWorkflow } from "./attachment-deletion-workflow.js";
 import { BookkeepingDescriptionWorkflow } from "./bookkeeping-description-workflow.js";
 import { CommentWorkflow } from "./comment-workflow.js";
@@ -8,6 +9,7 @@ import {
   requiredCapabilities,
   type CommandAction,
 } from "./policy.js";
+import { PaymentWorkflow } from "./payment-workflow.js";
 import { BridgeSession } from "./session.js";
 
 function asString(value: unknown): string {
@@ -38,6 +40,7 @@ export class CommandService {
   private readonly attachmentDeletion: AttachmentDeletionWorkflow;
   private readonly bookkeepingDescriptions: BookkeepingDescriptionWorkflow;
   private readonly comments: CommentWorkflow;
+  private readonly payments: PaymentWorkflow;
 
   constructor(
     private readonly session: BridgeSession,
@@ -50,6 +53,11 @@ export class CommandService {
       api,
     );
     this.comments = new CommentWorkflow(session, api);
+    this.payments = new PaymentWorkflow(
+      session,
+      api,
+      new AuthProxyClient("https://holvi.com"),
+    );
     this.handlers = {
       doctor: (auth) => this.doctor(auth),
       "transactions.list": (auth, params) =>
@@ -87,6 +95,8 @@ export class CommandService {
         }),
       "audit.types": (auth) => this.api.auditTypes(auth),
       "audit.list": (auth, params) => this.api.historicalAudit(auth, params),
+      "payments.create": (auth, params) => this.payments.create(auth, params),
+      "payments.send": (auth, params) => this.payments.send(auth, params),
     };
   }
 

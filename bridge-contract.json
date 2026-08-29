@@ -39,7 +39,16 @@
     "bookkeeping.suggestions": ["bookkeeping.read"],
     "bookkeeping.set-description": ["bookkeeping.write"],
     "audit.types": ["audit.read"],
-    "audit.list": ["audit.read"]
+    "audit.list": ["audit.read"],
+    "payments.create": ["payments.write"],
+    "payments.send": ["payments.send"]
+  },
+  "paymentLimits": {
+    "recipientNameBytes": 256,
+    "referenceBytes": 256,
+    "bicBytes": 11,
+    "responseBytes": 524288,
+    "pollIntervalMs": 2000
   },
   "apiResponseBytes": {
     "max": 2097152
@@ -104,6 +113,7 @@
   "timeoutsMs": {
     "signedRequestMaxAge": 30000,
     "nativeRequest": 120000,
+    "paymentConfirmation": 300000,
     "downloadTransfer": 600000,
     "uploadTransfer": 30000,
     "nativeReconnect": 1000

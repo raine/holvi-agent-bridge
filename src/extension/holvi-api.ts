@@ -80,6 +80,7 @@ export const auditLimitMin = 1;
 export const auditLimitMax = 5000;
 export const auditPageSize = 25;
 export const maxApiResponseBytes = 2 * 1024 * 1024;
+export const maxPaymentResponseBytes = 512 * 1024;
 export const commentPageSize = 25;
 export const maxCommentPages = 40;
 export const maxCommentResults = 1000;
@@ -231,6 +232,67 @@ export class HolviApi {
     return `${this.session.apiRoot()}debt/${encodeURIComponent(
       validateUuid(debtUuid, "debt"),
     )}/`;
+  }
+
+  paymentDebtCollectionPath(): string {
+    return `${this.session.apiRoot()}debt/`;
+  }
+
+  async createPaymentDebt(auth: Auth, payload: unknown): Promise<unknown> {
+    return this.request(
+      auth,
+      this.paymentDebtCollectionPath(),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+      maxPaymentResponseBytes,
+    );
+  }
+
+  async readPaymentDebt(auth: Auth, debtUuid: string): Promise<unknown> {
+    return this.request(
+      auth,
+      this.debtPath(debtUuid),
+      {},
+      maxPaymentResponseBytes,
+    );
+  }
+
+  async verifyPayee(auth: Auth, name: string, iban: string): Promise<unknown> {
+    const path = `/api/vop/${encodeURIComponent(this.session.config.poolHandle)}/payee-verification/`;
+    const expected = `/api/vop/${this.session.config.poolHandle}/payee-verification/`;
+    if (path !== expected) {
+      throw new Error("Refused an invalid payee-verification path.");
+    }
+    const headers = new Headers({
+      Accept: "application/json",
+      Authorization: `Bearer ${auth.token}`,
+      "Content-Type": "application/json",
+    });
+    if (auth.csrfToken) headers.set("X-CSRFToken", auth.csrfToken);
+    const fetchRequest = this.fetchRequest;
+    const response = await fetchRequest(
+      `${this.staticConfig.apiOrigin}${path}`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name, iban }),
+        credentials: "include",
+        cache: "no-store",
+        redirect: "error",
+      },
+    );
+    const text = await boundedResponseText(response, 128 * 1024);
+    if (!response.ok) {
+      throw new Error(`Holvi payee verification returned ${response.status}.`);
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error("Holvi payee verification returned malformed JSON.");
+    }
   }
 
   cardPath(cardProfileUuid: string): string {

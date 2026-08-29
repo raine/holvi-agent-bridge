@@ -132,6 +132,8 @@ describe("capability policy", () => {
         "reports.generate",
         "bookkeeping.write",
         "audit.read",
+        "payments.write",
+        "payments.send",
       ]),
     );
   });

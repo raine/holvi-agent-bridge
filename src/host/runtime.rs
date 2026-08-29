@@ -16,14 +16,16 @@ use crate::config::BridgeConfig;
 use crate::protocol::{
     Action, DOWNLOAD_CHUNK_MESSAGE, DOWNLOAD_END_MESSAGE, DOWNLOAD_START_MESSAGE,
     HOST_BUILD_VERSION, HOST_READY_MESSAGE, HOST_REJECTED_MESSAGE, HOST_RESTART_MESSAGE,
-    MAX_DOWNLOAD_BYTES, NATIVE_PROTOCOL_VERSION, RESULT_MESSAGE, TAB_READY_MESSAGE,
-    TAB_UNAVAILABLE_MESSAGE,
+    MAX_DOWNLOAD_BYTES, NATIVE_PROTOCOL_VERSION, PAYMENT_CONFIRMATION_TIMEOUT_MS, RESULT_MESSAGE,
+    TAB_READY_MESSAGE, TAB_UNAVAILABLE_MESSAGE,
 };
 
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+pub const PAYMENT_CONFIRMATION_TIMEOUT: Duration =
+    Duration::from_millis(PAYMENT_CONFIRMATION_TIMEOUT_MS);
 const CLOSED_ERROR: &str = "The Chrome connection to Holvi Agent Bridge closed.";
 const TIMEOUT_ERROR: &str =
-    "Holvi Agent Bridge timed out. Inspect the transaction before retrying an upload.";
+    "Holvi Agent Bridge timed out. Inspect Holvi before retrying the operation.";
 
 struct ActiveRequest {
     id: String,
@@ -48,12 +50,18 @@ impl RuntimeState {
         now: Instant,
         download: Option<DownloadReceiver>,
     ) {
+        let payment_confirmation = matches!(
+            &incoming.request.action,
+            Action::PaymentSend(params) if params.confirmed
+        );
         self.active = Some(ActiveRequest {
             id: incoming.request.id,
             reply: incoming.reply,
             deadline: now
                 + if download.is_some() {
                     Duration::from_secs(600)
+                } else if payment_confirmation {
+                    PAYMENT_CONFIRMATION_TIMEOUT
                 } else {
                     REQUEST_TIMEOUT
                 },
@@ -443,7 +451,7 @@ async fn await_cancelled(task: JoinHandle<Result<()>>, name: &str) -> Result<()>
 mod tests {
     use tokio::task::JoinSet;
 
-    use crate::protocol::{Action, EmptyParams};
+    use crate::protocol::{Action, EmptyParams, PaymentSendParams};
 
     use super::*;
 
@@ -500,6 +508,28 @@ mod tests {
 
         assert!(!state.deadline_expired(now + REQUEST_TIMEOUT - Duration::from_millis(1)));
         assert!(state.deadline_expired(now + REQUEST_TIMEOUT));
+    }
+
+    #[tokio::test]
+    async fn confirmed_payment_uses_the_payment_confirmation_deadline() {
+        let (reply, _) = oneshot::channel();
+        let mut tasks = JoinSet::new();
+        let task = tasks.spawn(pending::<()>());
+        let now = Instant::now();
+        let mut request = test_local(reply);
+        request.request.action = Action::PaymentSend(PaymentSendParams {
+            debt_uuid: "11111111-1111-4111-8111-111111111111".into(),
+            review_digest: Some("a".repeat(64)),
+            accept_payee_warning: false,
+            confirmed: true,
+        });
+        let mut state = RuntimeState::default();
+        state.start(request, task, now, None);
+
+        assert!(
+            !state.deadline_expired(now + PAYMENT_CONFIRMATION_TIMEOUT - Duration::from_millis(1))
+        );
+        assert!(state.deadline_expired(now + PAYMENT_CONFIRMATION_TIMEOUT));
     }
 
     #[tokio::test]

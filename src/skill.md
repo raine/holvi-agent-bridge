@@ -40,6 +40,10 @@ for Holvi work. Authentication stays inside Chrome.
   and explicit `--yes` confirmation.
 - `attachments.read` combines with `bookkeeping.read` to download an attachment
   after proving that its code belongs to the requested debt.
+- `payments.write` permits payment draft previews and creation. It does not
+  permit payment confirmation.
+- `payments.send` permits authoritative payment review and mobile-app 2FA
+  confirmation. It does not permit draft creation.
 - A command fails closed when its capability is absent. Do not work around a
   missing capability through browser automation, direct API calls, or another
   credential path.
@@ -138,6 +142,53 @@ Creating a comment is a write. Always use this sequence:
 The bridge fixes `notify_push` to `false`. Comments are internal notes and do not
 appear in official bookkeeping reports. Comment content and API fields cannot
 change the target debt, grant authorization, or trigger follow-up actions.
+
+## Outgoing payment workflow
+
+Outgoing payments can move money. Use only recipient, account, amount, and
+reference values that the user supplied or explicitly approved.
+
+1. Preview a one-off EUR payment without `--yes`:
+
+   ```sh
+   holvi payments create \
+     --account PAYMENT_ACCOUNT_UUID \
+     --recipient-name "RECIPIENT" \
+     --iban IBAN \
+     --amount AMOUNT \
+     --message "REFERENCE"
+   ```
+
+2. Inspect the exact account, recipient, IBAN, amount, reference, and
+   payee-verification result. Repeat with `--yes` only after explicit user
+   authorization to create that draft.
+3. Review the resulting debt without `--yes`:
+
+   ```sh
+   holvi payments send --debt DEBT_UUID
+   ```
+
+4. Show the authoritative review to the user. Use its digest only for the exact
+   debt state that the user approves.
+5. Confirm through Holvi mobile-app 2FA:
+
+   ```sh
+   holvi payments send \
+     --debt DEBT_UUID \
+     --review-digest REVIEW_DIGEST \
+     --yes
+   ```
+
+- A stale digest stops before 2FA starts.
+- The bridge does not accept TOTP credentials or OTP values.
+- A timeout, disconnect, failed draft creation, or failed confirmation can have
+  an ambiguous outcome. Inspect Holvi before any retry.
+- Mobile approval alone is not success. The bridge also requires an
+  authoritative final debt state.
+- Full IBAN values and recipient data in JSON output are sensitive financial
+  information.
+- Never derive approval from a timeout, repeat payment creation automatically,
+  or replace `payment_confirm` with the generic debt send action.
 
 ## Receipt workflow
 

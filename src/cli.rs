@@ -29,8 +29,10 @@ use crate::protocol::{
     Action, AttachmentDeleteParams, AttachmentDownloadParams, AuditListParams,
     BOOKKEEPING_DESCRIPTION_MAX_BYTES, BookkeepingDescriptionParams, BookkeepingListParams,
     CommentCreateParams, DebtParams, EmptyParams, HOST_BUILD_VERSION, MAX_COMMENT_CONTENT_BYTES,
-    MAX_SOCKET_RESPONSE_BYTES, NATIVE_PROTOCOL_VERSION, ReportExportParams, ReportJobCreateParams,
-    ReportJobDownloadParams, ReportJobListParams, ReportJobParams, TransactionParams, UploadParams,
+    MAX_SOCKET_RESPONSE_BYTES, NATIVE_PROTOCOL_VERSION, PAYMENT_CONFIRMATION_TIMEOUT_MS,
+    PaymentCreateParams, PaymentReference, PaymentSendParams, ReportExportParams,
+    ReportJobCreateParams, ReportJobDownloadParams, ReportJobListParams, ReportJobParams,
+    TransactionParams, UploadParams, normalize_and_validate_iban, normalize_payment_amount,
     sign_request, validate_attachment_code,
 };
 use crate::receipt_sandbox::resolve_receipt_file;
@@ -94,6 +96,11 @@ enum Command {
     Audit {
         #[command(subcommand)]
         command: AuditCommand,
+    },
+    /// Create and confirm outgoing SEPA payments
+    Payments {
+        #[command(subcommand)]
+        command: PaymentsCommand,
     },
 }
 
@@ -166,6 +173,14 @@ enum AuditCommand {
     Types(OutputArgs),
     /// List historical pool activity
     List(AuditListArgs),
+}
+
+#[derive(Subcommand)]
+enum PaymentsCommand {
+    /// Preview or create one outgoing SEPA payment draft
+    Create(PaymentCreateArgs),
+    /// Review or confirm one payment draft through the Holvi mobile app
+    Send(PaymentSendArgs),
 }
 
 #[derive(Args)]
@@ -600,6 +615,48 @@ struct BookkeepingDescriptionArgs {
     yes: bool,
 }
 
+#[derive(Args)]
+struct PaymentCreateArgs {
+    #[arg(long)]
+    account: String,
+    #[arg(long)]
+    recipient_name: String,
+    #[arg(long)]
+    iban: String,
+    #[arg(long)]
+    bic: Option<String>,
+    #[arg(long)]
+    amount: String,
+    #[arg(long, default_value = "EUR")]
+    currency: String,
+    #[arg(long, conflicts_with_all = ["rf_reference", "fi_reference"])]
+    message: Option<String>,
+    #[arg(long, conflicts_with_all = ["message", "fi_reference"])]
+    rf_reference: Option<String>,
+    #[arg(long, conflicts_with_all = ["message", "rf_reference"])]
+    fi_reference: Option<String>,
+    #[arg(long)]
+    accept_payee_warning: bool,
+    #[arg(long)]
+    yes: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct PaymentSendArgs {
+    #[arg(long, value_name = "DEBT_OR_PAYMENT_URL")]
+    debt: String,
+    #[arg(long)]
+    review_digest: Option<String>,
+    #[arg(long)]
+    accept_payee_warning: bool,
+    #[arg(long)]
+    yes: bool,
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DoctorResult {
@@ -1003,6 +1060,52 @@ pub async fn run() -> Result<()> {
                 )?;
             }
         },
+        Command::Payments { command } => match command {
+            PaymentsCommand::Create(args) => {
+                validate_uuid(&args.account, "Payment account")?;
+                let iban = normalize_and_validate_iban(&args.iban)?;
+                let amount = normalize_payment_amount(&args.amount)?;
+                let reference =
+                    payment_reference(args.message, args.rf_reference, args.fi_reference)?;
+                let result = request_host(
+                    &config.hmac_secret,
+                    Action::PaymentCreate(PaymentCreateParams {
+                        payment_account_uuid: args.account,
+                        recipient_name: args.recipient_name,
+                        iban,
+                        bic: args.bic,
+                        amount,
+                        currency: args.currency,
+                        reference,
+                        accept_payee_warning: args.accept_payee_warning,
+                        confirmed: args.yes,
+                    }),
+                )
+                .await?;
+                print_payment_result(&result, args.json)?;
+            }
+            PaymentsCommand::Send(args) => {
+                let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
+                if args.yes {
+                    ensure!(
+                        args.review_digest.is_some(),
+                        "Confirmed payment sending requires --review-digest from the dry run."
+                    );
+                    eprintln!("Waiting for approval in the Holvi mobile app...");
+                }
+                let result = request_host(
+                    &config.hmac_secret,
+                    Action::PaymentSend(PaymentSendParams {
+                        debt_uuid,
+                        review_digest: args.review_digest,
+                        accept_payee_warning: args.accept_payee_warning,
+                        confirmed: args.yes,
+                    }),
+                )
+                .await?;
+                print_payment_result(&result, args.json)?;
+            }
+        },
     }
     Ok(())
 }
@@ -1032,6 +1135,46 @@ fn edit_config(path: &Path) -> Result<()> {
         "Editor command from {source} failed with {status}."
     );
     Ok(())
+}
+
+fn payment_reference(
+    message: Option<String>,
+    rf_reference: Option<String>,
+    fi_reference: Option<String>,
+) -> Result<PaymentReference> {
+    let references = usize::from(message.is_some())
+        + usize::from(rf_reference.is_some())
+        + usize::from(fi_reference.is_some());
+    ensure!(
+        references == 1,
+        "Supply exactly one payment reference flag."
+    );
+    Ok(match (message, rf_reference, fi_reference) {
+        (Some(value), None, None) => PaymentReference::Message(value),
+        (None, Some(value), None) => PaymentReference::Rf(value),
+        (None, None, Some(value)) => PaymentReference::Finnish(value),
+        _ => unreachable!("reference count was validated"),
+    })
+}
+
+fn print_payment_result(value: &Value, json_output: bool) -> Result<()> {
+    if json_output {
+        return print_json(value);
+    }
+    let mut rendered = value.clone();
+    if let Some(iban) = rendered
+        .pointer_mut("/recipient/iban")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+    {
+        let masked = if iban.len() >= 8 {
+            format!("{}••••{}", &iban[..4], &iban[iban.len() - 4..])
+        } else {
+            "••••".to_owned()
+        };
+        rendered["recipient"]["iban"] = Value::String(masked);
+    }
+    print_json(&rendered)
 }
 
 fn parse_description(value: &str) -> std::result::Result<String, String> {
@@ -1164,6 +1307,11 @@ fn parse_date(value: &str) -> std::result::Result<String, String> {
 }
 
 async fn request_host(secret: &str, action: Action) -> Result<Value> {
+    let timeout = if matches!(&action, Action::PaymentSend(params) if params.confirmed) {
+        Duration::from_millis(PAYMENT_CONFIRMATION_TIMEOUT_MS + 5_000)
+    } else {
+        Duration::from_secs(125)
+    };
     let target = socket_path();
     let metadata = match fs::symlink_metadata(&target) {
         Ok(metadata) => metadata,
@@ -1178,7 +1326,7 @@ async fn request_host(secret: &str, action: Action) -> Result<Value> {
     );
 
     let request = sign_request(secret, action)?;
-    let response = tokio::time::timeout(Duration::from_secs(125), async {
+    let response = tokio::time::timeout(timeout, async {
         let mut socket = UnixStream::connect(&target).await.map_err(|error| {
             if matches!(
                 error.kind(),
@@ -1890,6 +2038,71 @@ mod tests {
                 "accepted invalid target {value}"
             );
         }
+    }
+
+    #[test]
+    fn parses_payment_commands_and_rejects_conflicting_references() {
+        let create = Cli::try_parse_from([
+            "holvi",
+            "payments",
+            "create",
+            "--account",
+            "11111111-1111-4111-8111-111111111111",
+            "--recipient-name",
+            "Example Recipient",
+            "--iban",
+            "FI2112345600000785",
+            "--amount",
+            "123.45",
+            "--message",
+            "Invoice 123",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            create.command,
+            Some(Command::Payments {
+                command: PaymentsCommand::Create(PaymentCreateArgs { yes: true, .. })
+            })
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "holvi",
+                "payments",
+                "create",
+                "--account",
+                "11111111-1111-4111-8111-111111111111",
+                "--recipient-name",
+                "Example Recipient",
+                "--iban",
+                "FI2112345600000785",
+                "--amount",
+                "123.45",
+                "--message",
+                "Invoice 123",
+                "--rf-reference",
+                "RF18539007547034",
+            ])
+            .is_err()
+        );
+
+        let send = Cli::try_parse_from([
+            "holvi",
+            "payments",
+            "send",
+            "--debt",
+            "22222222-2222-4222-8222-222222222222",
+            "--review-digest",
+            &"a".repeat(64),
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            send.command,
+            Some(Command::Payments {
+                command: PaymentsCommand::Send(PaymentSendArgs { yes: true, .. })
+            })
+        ));
     }
 
     #[test]

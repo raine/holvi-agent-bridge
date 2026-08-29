@@ -8,10 +8,17 @@ import {
   commentPageSize,
   maxApiResponseBytes,
   maxCommentPages,
+  maxPaymentResponseBytes,
   maxCommentResponseBytes,
   maxCommentResults,
 } from "./holvi-api.js";
 import { nativeMessageTypes, nativeReconnectDelayMs } from "./native-bridge.js";
+import {
+  paymentBicMaxBytes,
+  paymentPollIntervalMs,
+  paymentRecipientNameMaxBytes,
+  paymentReferenceMaxBytes,
+} from "./payment-workflow.js";
 import {
   actionCapabilities,
   minimumFileBytes,
@@ -115,6 +122,19 @@ describe("cross-language bridge contract", () => {
       pageSize: auditPageSize,
     }).toEqual(contract.auditLimit);
     expect(maxApiResponseBytes).toBe(contract.apiResponseBytes.max);
+    expect({
+      recipientNameBytes: paymentRecipientNameMaxBytes,
+      referenceBytes: paymentReferenceMaxBytes,
+      bicBytes: paymentBicMaxBytes,
+      responseBytes: maxPaymentResponseBytes,
+      pollIntervalMs: paymentPollIntervalMs,
+    }).toEqual({
+      recipientNameBytes: contract.paymentLimits.recipientNameBytes,
+      referenceBytes: contract.paymentLimits.referenceBytes,
+      bicBytes: contract.paymentLimits.bicBytes,
+      responseBytes: contract.paymentLimits.responseBytes,
+      pollIntervalMs: contract.paymentLimits.pollIntervalMs,
+    });
     expect(bookkeepingDescriptionMaxBytes).toBe(
       contract.bookkeepingDescriptionBytes.max,
     );

@@ -1,8 +1,261 @@
 "use strict";
 (() => {
 
-  // src/extension/projections.ts
+  // src/extension/policy.ts
+  var minimumFileBytes = 1;
+  var maximumDownloadBytes = 1024 * 1024 * 1024;
+  var actionCapabilities = {
+    doctor: [],
+    "transactions.list": ["transactions.read"],
+    "transactions.get": ["transactions.read"],
+    "debts.get": ["transactions.read"],
+    "comments.list": ["transactions.read"],
+    "comments.create": ["transactions.read", "comments.write"],
+    "attachments.upload": ["transactions.read", "attachments.write"],
+    "attachments.delete": ["transactions.read", "attachments.delete"],
+    "attachments.download": ["bookkeeping.read", "attachments.read"],
+    "accounts.list": ["accounts.read"],
+    "reports.types": ["reports.read"],
+    "reports.export": ["reports.read"],
+    "reports.jobs.list": ["reports.read"],
+    "reports.jobs.get": ["reports.read"],
+    "reports.jobs.create": ["reports.generate"],
+    "reports.jobs.download": ["reports.read"],
+    "bookkeeping.list": ["bookkeeping.read"],
+    "bookkeeping.get": ["bookkeeping.read"],
+    "bookkeeping.categories": ["bookkeeping.read"],
+    "bookkeeping.suggestions": ["bookkeeping.read"],
+    "bookkeeping.set-description": ["bookkeeping.write"],
+    "audit.types": ["audit.read"],
+    "audit.list": ["audit.read"],
+    "payments.create": ["payments.write"],
+    "payments.send": ["payments.send"]
+  };
+  var supportedCapabilities = new Set(Object.values(actionCapabilities).flat());
+  function isBridgeAction(action) {
+    return Object.hasOwn(actionCapabilities, action);
+  }
+  function requiredCapabilities(action) {
+    return isBridgeAction(action) ? actionCapabilities[action] : null;
+  }
+
+  // src/extension/session.ts
   var uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  var poolHandlePattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+  function groupPathSegmentFromUrl(value, accountOrigin) {
+    try {
+      const url = new URL(value);
+      if (url.origin !== accountOrigin) {
+        return "";
+      }
+      const match = url.pathname.match(/^\/group\/([^/]+)(?:\/|$)/);
+      return match?.[1] ? decodeURIComponent(match[1]) : "";
+    } catch {
+      return "";
+    }
+  }
+  function validateHostIdentity(protocolVersion, hostVersion, staticConfig) {
+    if (protocolVersion !== staticConfig.nativeProtocolVersion) {
+      const receivedProtocol = typeof protocolVersion === "number" ? protocolVersion : "unknown";
+      throw new Error(`Native host protocol ${receivedProtocol} is incompatible with extension protocol ${staticConfig.nativeProtocolVersion}. Reload Holvi Agent Bridge in chrome://extensions or restart Chrome.`);
+    }
+    if (typeof hostVersion !== "string" || hostVersion.length < 1 || hostVersion.length > 64) {
+      throw new Error("The native host supplied an invalid build version.");
+    }
+    return { protocolVersion, hostVersion };
+  }
+  function validateRuntimeConfig(value, staticConfig) {
+    const config = value;
+    const groupParts = (config.groupPathSegment || "").match(/^([^/+]+)\+([^/]+)$/);
+    const groupPoolHandle = groupParts?.[1] || "";
+    if (!groupParts || !poolHandlePattern.test(config.poolHandle || "") || groupPoolHandle !== config.poolHandle || !uuidPattern.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < minimumFileBytes || (config.maxFileBytes || 0) > staticConfig.maxFileBytes) {
+      throw new Error("The native host supplied an invalid Holvi account boundary.");
+    }
+    return config;
+  }
+  function validateUuid(value, resource) {
+    if (!uuidPattern.test(value || "")) {
+      throw new Error(`A valid Holvi ${resource} UUID is required.`);
+    }
+    return value;
+  }
+
+  class BridgeSession {
+    staticConfig;
+    runtimeConfig = null;
+    hostIdentity = null;
+    constructor(staticConfig) {
+      this.staticConfig = staticConfig;
+    }
+    configure(value, protocolVersion = this.staticConfig.nativeProtocolVersion, hostVersion = this.staticConfig.extensionVersion) {
+      const identity = validateHostIdentity(protocolVersion, hostVersion, this.staticConfig);
+      const config = validateRuntimeConfig(value, this.staticConfig);
+      this.hostIdentity = identity;
+      this.runtimeConfig = config;
+      return config;
+    }
+    clear() {
+      this.runtimeConfig = null;
+      this.hostIdentity = null;
+    }
+    get identity() {
+      if (!this.hostIdentity) {
+        throw new Error("The local bridge has no native host identity.");
+      }
+      return this.hostIdentity;
+    }
+    get extensionVersion() {
+      return this.staticConfig.extensionVersion;
+    }
+    get optionalConfig() {
+      return this.runtimeConfig;
+    }
+    get config() {
+      if (!this.runtimeConfig) {
+        throw new Error("The local bridge has no configured Holvi account.");
+      }
+      return this.runtimeConfig;
+    }
+    requireCapabilities(...capabilities) {
+      if (!this.runtimeConfig || capabilities.some((capability) => !this.runtimeConfig?.capabilities.includes(capability))) {
+        throw new Error(`Action requires capabilities: ${capabilities.join(", ")}.`);
+      }
+    }
+    apiRoot() {
+      return `/api/pool/${encodeURIComponent(this.config.poolHandle)}/`;
+    }
+  }
+
+  // src/extension/auth-proxy.ts
+  var basePath = "/api/auth-proxy/2fa/v1/token/";
+  var maxResponseBytes = 128 * 1024;
+  var tokenIdPattern = /^[A-Za-z0-9_-]{1,256}$/;
+  function record(value, label) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${label} has an unexpected shape.`);
+    }
+    return value;
+  }
+  function boundedSecret(value, label) {
+    if (typeof value !== "string" || value.length < 1 || value.length > 16384) {
+      throw new Error(`${label} has an unexpected shape.`);
+    }
+    return value;
+  }
+  function tokenId(value) {
+    const id = boundedSecret(value, "Holvi 2FA token ID");
+    if (!tokenIdPattern.test(id)) {
+      throw new Error("Holvi 2FA token ID has an unexpected shape.");
+    }
+    return id;
+  }
+  async function responseJson(response) {
+    const declared = response.headers.get("content-length");
+    if (declared && (!/^\d+$/.test(declared) || Number(declared) > maxResponseBytes)) {
+      throw new Error("Holvi 2FA response exceeded its size limit.");
+    }
+    const buffer = new Uint8Array(await response.arrayBuffer());
+    if (buffer.byteLength > maxResponseBytes) {
+      throw new Error("Holvi 2FA response exceeded its size limit.");
+    }
+    if (!response.ok) {
+      throw new Error(`Holvi 2FA request returned ${response.status}.`);
+    }
+    if (!buffer.byteLength)
+      return {};
+    try {
+      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
+    } catch {
+      throw new Error("Holvi 2FA response was malformed.");
+    }
+  }
+
+  class AuthProxyClient {
+    origin;
+    fetchRequest;
+    constructor(origin = "https://holvi.com", fetchRequest = fetch) {
+      this.origin = origin;
+      this.fetchRequest = fetchRequest;
+      const url = new URL(origin);
+      if (url.href !== "https://holvi.com/" || url.username || url.password || url.port || url.hash) {
+        throw new Error("Holvi 2FA origin is invalid.");
+      }
+    }
+    async initiatePaymentConfirmation(auth, debtUuid) {
+      const uuid = validateUuid(debtUuid, "debt");
+      const body = await this.request(`${basePath}initiate/`, "POST", `Bearer ${auth.token}`, auth.csrfToken, {
+        action_name: "payment_confirm",
+        action_data: { debt_uuid: uuid }
+      });
+      const source = record(body, "Holvi 2FA initiation response");
+      const meta = record(source.token_meta, "Holvi 2FA token metadata");
+      const authorization = `${boundedSecret(source.token_type, "Holvi 2FA token type")} ${boundedSecret(source.id_token, "Holvi 2FA authorization token")}`;
+      const devices = meta.totp_devices;
+      if (!Array.isArray(devices) || devices.length > 20) {
+        throw new Error("Holvi 2FA device list has an unexpected shape.");
+      }
+      const hasMobileDevice = devices.some((value) => {
+        const device = record(value, "Holvi 2FA device");
+        boundedSecret(device.id, "Holvi 2FA device ID");
+        return device.device_type === "user_device";
+      });
+      const expirationSeconds = Number(source.expiration_delta ?? source.expires_in ?? 300);
+      if (!Number.isSafeInteger(expirationSeconds) || expirationSeconds < 0 || expirationSeconds > 3600) {
+        throw new Error("Holvi 2FA expiration has an unexpected shape.");
+      }
+      return {
+        authorization,
+        tokenId: tokenId(meta.twofactor_token_id),
+        expirationSeconds,
+        hasMobileDevice
+      };
+    }
+    async status(session) {
+      const body = await this.request(`${basePath}${tokenId(session.tokenId)}/`, "GET", session.authorization);
+      const source = record(body, "Holvi 2FA status response");
+      const rawState = source.state;
+      const expirationSeconds = Number(source.expiration_delta ?? 0);
+      if (!Number.isSafeInteger(expirationSeconds) || expirationSeconds < 0 || expirationSeconds > 3600) {
+        throw new Error("Holvi 2FA status expiration has an unexpected shape.");
+      }
+      if (rawState === "activated" || rawState === "expired" || rawState === "cancelled" || rawState === "rejected") {
+        return { state: rawState, expirationSeconds };
+      }
+      if (expirationSeconds > 0) {
+        return { state: "pending", expirationSeconds };
+      }
+      return { state: "expired", expirationSeconds: 0 };
+    }
+    async cancel(session) {
+      await this.request(`${basePath}${tokenId(session.tokenId)}/`, "DELETE", session.authorization);
+    }
+    async request(path, method, authorization, csrfToken = "", body) {
+      const allowed = method === "POST" && path === `${basePath}initiate/` || (method === "GET" || method === "DELETE") && new RegExp(`^${basePath}[A-Za-z0-9_-]{1,256}/$`).test(path);
+      if (!allowed)
+        throw new Error("Refused an unsupported Holvi 2FA path.");
+      const headers = new Headers({
+        Accept: "application/json",
+        Authorization: authorization
+      });
+      if (csrfToken)
+        headers.set("X-CSRFToken", csrfToken);
+      if (body !== undefined)
+        headers.set("Content-Type", "application/json");
+      const fetchRequest = this.fetchRequest;
+      const response = await fetchRequest(`${this.origin}${path}`, {
+        method,
+        headers,
+        ...body === undefined ? {} : { body: JSON.stringify(body) },
+        credentials: "include",
+        cache: "no-store",
+        redirect: "error"
+      });
+      return responseJson(response);
+    }
+  }
+
+  // src/extension/projections.ts
+  var uuidPattern2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   var decimalPattern = /^-?\d+(?:\.\d+)?$/;
   var maxStringLength = 4096;
   var maxBookkeepingItems = 500;
@@ -18,7 +271,7 @@
   var maxCommentResults = 1000;
   var maxCommentContentBytes = 16 * 1024;
   var maxProjectionBytes = 512 * 1024;
-  function record(value, label) {
+  function record2(value, label) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error(`${label} has an unexpected shape.`);
     }
@@ -38,7 +291,7 @@
   }
   function uuid(value, label) {
     const text = boundedString(value, label);
-    if (!uuidPattern.test(text)) {
+    if (!uuidPattern2.test(text)) {
       throw new Error(`${label} must be a UUID.`);
     }
     return text;
@@ -94,7 +347,7 @@
     if (value === null || value === undefined) {
       return null;
     }
-    const source = record(value, label);
+    const source = record2(value, label);
     return {
       currency: optionalString(source.currency, `${label} currency`),
       gross: decimal(source.gross, `${label} gross`),
@@ -137,7 +390,7 @@
     if (value === null || value === undefined) {
       return {};
     }
-    return record(value, label);
+    return record2(value, label);
   }
   function boundedArray(value, label, limit, optional = false) {
     if (optional && (value === null || value === undefined)) {
@@ -155,7 +408,7 @@
     const matches = boundedArray(value, "Payment matches", maxPaymentMatches, true);
     let direct = null;
     for (const entry of matches) {
-      const match = record(entry, "Payment match");
+      const match = record2(entry, "Payment match");
       const matchType = optionalString(match.match_type, "Payment match type");
       if (matchType === "direct") {
         if (direct !== null) {
@@ -167,7 +420,7 @@
     return direct ? uuid(direct.uuid, "Payment debt UUID") : null;
   }
   function payment(value) {
-    const source = record(value, "Payment");
+    const source = record2(value, "Payment");
     const counterparty = optionalRecord(source.counterparty, "Payment counterparty");
     const fx = optionalRecord(source.fx_meta, "Payment foreign exchange metadata");
     const paymentTimestamp = timestamp(source.ux_timestamp, "Payment timestamp");
@@ -190,9 +443,9 @@
     };
   }
   function projectTransactionFeedPage(value) {
-    const page = record(value, "Payments feed page");
+    const page = record2(value, "Payments feed page");
     const results = boundedArray(page.results, "Payments feed results", maxFeedPageResults).map(payment);
-    const pagination = record(page.pagination, "Payments feed pagination");
+    const pagination = record2(page.pagination, "Payments feed pagination");
     if (typeof pagination.has_more !== "boolean") {
       throw new Error("Payments feed pagination has an unexpected shape.");
     }
@@ -210,7 +463,7 @@
     return projection(value);
   }
   function projectTransactionDetailDebt(value, debtUuid, paymentAccountUuid) {
-    const debt = record(value, "Transaction detail debt");
+    const debt = record2(value, "Transaction detail debt");
     const requestedUuid = uuid(debtUuid, "Debt UUID");
     const responseUuid = uuid(debt.uuid, "Transaction detail debt UUID");
     if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
@@ -256,17 +509,17 @@
     });
   }
   function projectTransactionAccount(value, paymentAccountUuid) {
-    const pool = record(value, "Pool account response");
+    const pool = record2(value, "Pool account response");
     const requestedUuid = uuid(paymentAccountUuid, "Configured payment account UUID");
     const accounts = boundedArray(pool.paymentaccounts, "Pool payment accounts", maxPaymentAccounts);
     const matches = accounts.filter((entry) => {
-      const account2 = record(entry, "Pool payment account");
+      const account2 = record2(entry, "Pool payment account");
       return uuid(account2.uuid, "Pool payment account UUID").toLowerCase() === requestedUuid.toLowerCase();
     });
     if (matches.length !== 1) {
       throw new Error("Holvi pool response did not contain one configured payment account.");
     }
-    const account = record(matches[0], "Configured payment account");
+    const account = record2(matches[0], "Configured payment account");
     const iban = boundedString(account.iban, "Payment account IBAN");
     if (iban.length < 8 || iban.length > 64 || !/^[a-z0-9]+$/i.test(iban)) {
       throw new Error("Payment account IBAN has an unexpected shape.");
@@ -279,7 +532,7 @@
     });
   }
   function projectTransactionCard(value, cardProfileUuid, paymentAccountUuid) {
-    const card = record(value, "Transaction card profile");
+    const card = record2(value, "Transaction card profile");
     const requestedCard = uuid(cardProfileUuid, "Card profile UUID");
     const responseCard = uuid(card.uuid, "Transaction card profile UUID");
     if (responseCard.toLowerCase() !== requestedCard.toLowerCase()) {
@@ -301,7 +554,7 @@
     });
   }
   function projectTransactionPaymentMetadata(value, paymentUuid) {
-    const payment2 = record(value, "Transaction payment details");
+    const payment2 = record2(value, "Transaction payment details");
     const requestedUuid = uuid(paymentUuid, "Payment UUID");
     const responseUuid = uuid(payment2.uuid, "Transaction payment details UUID");
     if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
@@ -319,7 +572,7 @@
     });
   }
   function projectTransactionDetails(value) {
-    return projection(record(value, "Transaction details"));
+    return projection(record2(value, "Transaction details"));
   }
   function attachmentCode(value) {
     const code = boundedString(value, "Attachment code");
@@ -331,7 +584,7 @@
   function debtAttachments(value, label) {
     const codes = new Set;
     return boundedArray(value, `${label} attachments`, maxDebtAttachments, true).map((entry) => {
-      const source = record(entry, `${label} attachment`);
+      const source = record2(entry, `${label} attachment`);
       const code = attachmentCode(source.code);
       if (codes.has(code)) {
         throw new Error(`${label} contains an ambiguous attachment code.`);
@@ -345,7 +598,7 @@
     });
   }
   function debtRecord(value, debtUuid, paymentAccountUuid, label) {
-    const debt = record(value, label);
+    const debt = record2(value, label);
     const requestedUuid = uuid(debtUuid, "Debt UUID");
     const responseUuid = uuid(debt.uuid, `${label} UUID`);
     if (responseUuid.toLowerCase() !== requestedUuid.toLowerCase()) {
@@ -382,7 +635,7 @@
     if (value === null || value === undefined) {
       return { uuid: null, name: "Holvi", isHolvi: true };
     }
-    const source = record(value, "Comment creator");
+    const source = record2(value, "Comment creator");
     const creatorUuid = optionalUuid(source.uuid, "Comment creator UUID");
     const firstName = optionalString(source.first_name, "Comment creator first name") ?? optionalString(source.firstname, "Comment creator first name");
     const lastName = optionalString(source.last_name, "Comment creator last name") ?? optionalString(source.lastname, "Comment creator last name");
@@ -393,7 +646,7 @@
     return { uuid: creatorUuid, name, isHolvi: false };
   }
   function comment(value) {
-    const source = record(value, "Comment");
+    const source = record2(value, "Comment");
     if (typeof source.push_notified !== "boolean") {
       throw new Error("Comment notification state has an unexpected shape.");
     }
@@ -412,7 +665,7 @@
         next: ""
       });
     }
-    const page = record(value, "Comment page");
+    const page = record2(value, "Comment page");
     const results = boundedArray(page.results, "Comment page results", maxCommentPageResults).map(comment);
     const next = optionalString(page.next, "Comment next page") ?? "";
     return projection({ results, next });
@@ -427,7 +680,7 @@
     return debtRecord(value, debtUuid, paymentAccountUuid, "Upload debt");
   }
   function projectAttachmentDeletionDebt(value, debtUuid, paymentAccountUuid) {
-    const debt = record(value, "Attachment deletion debt");
+    const debt = record2(value, "Attachment deletion debt");
     const expectedAccount = uuid(paymentAccountUuid, "Configured payment account UUID");
     const actualAccount = uuid(debt.payment_account_uuid, "Attachment deletion payment account UUID");
     if (actualAccount.toLowerCase() !== expectedAccount.toLowerCase()) {
@@ -439,7 +692,7 @@
     });
   }
   function bookkeepingItem(value) {
-    const item = record(value, "Bookkeeping item");
+    const item = record2(value, "Bookkeeping item");
     return {
       itemUuid: uuid(item.uuid, "Bookkeeping item UUID"),
       description: optionalString(item.description, "Bookkeeping description"),
@@ -454,7 +707,7 @@
     };
   }
   function projectBookkeepingDebt(value, debtUuid) {
-    const debt = record(value, "Bookkeeping debt");
+    const debt = record2(value, "Bookkeeping debt");
     const items = debt.items === null || debt.items === undefined ? [] : debt.items;
     if (!Array.isArray(items)) {
       throw new Error("Holvi bookkeeping debt has an invalid item list.");
@@ -503,7 +756,7 @@
       throw new Error("Holvi category listing exceeded its result limit.");
     }
     return projection(value.map((entry) => {
-      const category = record(entry, "Bookkeeping category");
+      const category = record2(entry, "Bookkeeping category");
       return {
         code: boundedString(category.code, "Bookkeeping category code"),
         handle: optionalString(category.handle, "Bookkeeping category handle"),
@@ -512,7 +765,7 @@
     }));
   }
   function projectSuggestions(value, debtUuid) {
-    const suggestions = record(value, "Bookkeeping suggestions");
+    const suggestions = record2(value, "Bookkeeping suggestions");
     if (!Array.isArray(suggestions.categories)) {
       throw new Error("Holvi returned an unexpected suggestion list shape.");
     }
@@ -523,7 +776,7 @@
       if (typeof entry === "string") {
         return boundedString(entry, "Suggested category code");
       }
-      return boundedString(record(entry, "Suggested category").code, "Suggested category code");
+      return boundedString(record2(entry, "Suggested category").code, "Suggested category code");
     });
     return projection({
       debtUuid: uuid(debtUuid, "Debt UUID"),
@@ -534,7 +787,7 @@
     if (value === null || value === undefined) {
       return { name: "Holvi", isHolvi: true };
     }
-    const source = record(value, "Activity creator");
+    const source = record2(value, "Activity creator");
     const name = optionalString(source.name, "Activity creator name") ?? [
       optionalString(source.firstname, "Activity creator first name"),
       optionalString(source.lastname, "Activity creator last name")
@@ -542,7 +795,7 @@
     return { name: name || "Unknown", isHolvi: false };
   }
   function auditEntry(value) {
-    const entry = record(value, "Activity entry");
+    const entry = record2(value, "Activity entry");
     const timestamp2 = boundedString(entry.timestamp, "Activity timestamp");
     if (!Number.isFinite(Date.parse(timestamp2))) {
       throw new Error("Activity timestamp is invalid.");
@@ -560,11 +813,11 @@
     };
   }
   function projectAccounts(value) {
-    const pool = record(value, "Pool");
+    const pool = record2(value, "Pool");
     const accounts = boundedArray(pool.paymentaccounts, "Payment accounts", 100);
     const seen = new Set;
     const results = accounts.map((entry) => {
-      const account = record(entry, "Payment account");
+      const account = record2(entry, "Payment account");
       const paymentAccountUuid = uuid(account.uuid, "Payment account UUID");
       if (seen.has(paymentAccountUuid.toLowerCase()))
         throw new Error("Holvi returned duplicate payment accounts.");
@@ -583,9 +836,9 @@
     return projection({ count: results.length, results });
   }
   function projectBookkeepingPage(value) {
-    const page = record(value, "Bookkeeping page");
+    const page = record2(value, "Bookkeeping page");
     const results = boundedArray(page.results, "Bookkeeping results", 100).map((entry) => {
-      const debt = record(entry, "Bookkeeping list debt");
+      const debt = record2(entry, "Bookkeeping list debt");
       return projectBookkeepingDebt(debt, uuid(debt.uuid, "Bookkeeping debt UUID"));
     });
     return projection({
@@ -594,10 +847,10 @@
     });
   }
   function projectReportJobs(value) {
-    const page = record(value, "Report jobs");
+    const page = record2(value, "Report jobs");
     const seen = new Set;
     const results = boundedArray(page.results, "Report job results", 100).map((entry) => {
-      const job = record(entry, "Report job");
+      const job = record2(entry, "Report job");
       const reportUuid = uuid(job.uuid, "Report UUID");
       if (seen.has(reportUuid.toLowerCase()))
         throw new Error("Holvi returned duplicate report jobs.");
@@ -626,7 +879,7 @@
     if (Array.isArray(value)) {
       source = value;
     } else {
-      const typeClasses = record(value, "Activity types");
+      const typeClasses = record2(value, "Activity types");
       if (Array.isArray(typeClasses.results)) {
         source = boundedArray(typeClasses.results, "Activity types", 200);
       } else {
@@ -637,14 +890,14 @@
         source = keys;
       }
     }
-    const results = source.map((entry) => typeof entry === "string" ? boundedString(entry, "Activity type") : boundedString(record(entry, "Activity type").value ?? record(entry, "Activity type").code, "Activity type"));
+    const results = source.map((entry) => typeof entry === "string" ? boundedString(entry, "Activity type") : boundedString(record2(entry, "Activity type").value ?? record2(entry, "Activity type").code, "Activity type"));
     if (new Set(results).size !== results.length) {
       throw new Error("Activity types contain duplicate values.");
     }
     return projection({ count: results.length, results });
   }
   function projectAuditTraversalPage(value) {
-    const page = record(value, "Activity page");
+    const page = record2(value, "Activity page");
     return projection({
       results: boundedArray(page.results, "Activity results", 25).map(auditEntry),
       next: optionalString(page.next, "Activity next page") ?? ""
@@ -654,7 +907,7 @@
     if (!Number.isInteger(limit) || limit < 1 || limit > maxAuditResults) {
       throw new Error("Activity limit is outside the configured range.");
     }
-    const page = record(value, "Activity page");
+    const page = record2(value, "Activity page");
     if (!Array.isArray(page.results) || page.results.length > maxAuditEnvelopeResults) {
       throw new Error("Holvi returned an unexpected activity feed shape.");
     }
@@ -676,129 +929,6 @@
       order: "newest-first",
       results
     });
-  }
-
-  // src/extension/policy.ts
-  var minimumFileBytes = 1;
-  var maximumDownloadBytes = 1024 * 1024 * 1024;
-  var actionCapabilities = {
-    doctor: [],
-    "transactions.list": ["transactions.read"],
-    "transactions.get": ["transactions.read"],
-    "debts.get": ["transactions.read"],
-    "comments.list": ["transactions.read"],
-    "comments.create": ["transactions.read", "comments.write"],
-    "attachments.upload": ["transactions.read", "attachments.write"],
-    "attachments.delete": ["transactions.read", "attachments.delete"],
-    "attachments.download": ["bookkeeping.read", "attachments.read"],
-    "accounts.list": ["accounts.read"],
-    "reports.types": ["reports.read"],
-    "reports.export": ["reports.read"],
-    "reports.jobs.list": ["reports.read"],
-    "reports.jobs.get": ["reports.read"],
-    "reports.jobs.create": ["reports.generate"],
-    "reports.jobs.download": ["reports.read"],
-    "bookkeeping.list": ["bookkeeping.read"],
-    "bookkeeping.get": ["bookkeeping.read"],
-    "bookkeeping.categories": ["bookkeeping.read"],
-    "bookkeeping.suggestions": ["bookkeeping.read"],
-    "bookkeeping.set-description": ["bookkeeping.write"],
-    "audit.types": ["audit.read"],
-    "audit.list": ["audit.read"]
-  };
-  var supportedCapabilities = new Set(Object.values(actionCapabilities).flat());
-  function isBridgeAction(action) {
-    return Object.hasOwn(actionCapabilities, action);
-  }
-  function requiredCapabilities(action) {
-    return isBridgeAction(action) ? actionCapabilities[action] : null;
-  }
-
-  // src/extension/session.ts
-  var uuidPattern2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  var poolHandlePattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
-  function groupPathSegmentFromUrl(value, accountOrigin) {
-    try {
-      const url = new URL(value);
-      if (url.origin !== accountOrigin) {
-        return "";
-      }
-      const match = url.pathname.match(/^\/group\/([^/]+)(?:\/|$)/);
-      return match?.[1] ? decodeURIComponent(match[1]) : "";
-    } catch {
-      return "";
-    }
-  }
-  function validateHostIdentity(protocolVersion, hostVersion, staticConfig) {
-    if (protocolVersion !== staticConfig.nativeProtocolVersion) {
-      const receivedProtocol = typeof protocolVersion === "number" ? protocolVersion : "unknown";
-      throw new Error(`Native host protocol ${receivedProtocol} is incompatible with extension protocol ${staticConfig.nativeProtocolVersion}. Reload Holvi Agent Bridge in chrome://extensions or restart Chrome.`);
-    }
-    if (typeof hostVersion !== "string" || hostVersion.length < 1 || hostVersion.length > 64) {
-      throw new Error("The native host supplied an invalid build version.");
-    }
-    return { protocolVersion, hostVersion };
-  }
-  function validateRuntimeConfig(value, staticConfig) {
-    const config = value;
-    const groupParts = (config.groupPathSegment || "").match(/^([^/+]+)\+([^/]+)$/);
-    const groupPoolHandle = groupParts?.[1] || "";
-    if (!groupParts || !poolHandlePattern.test(config.poolHandle || "") || groupPoolHandle !== config.poolHandle || !uuidPattern2.test(config.paymentAccountUuid || "") || !Array.isArray(config.capabilities) || config.capabilities.length < 1 || config.capabilities.some((capability) => !supportedCapabilities.has(capability)) || new Set(config.capabilities).size !== config.capabilities.length || !Number.isSafeInteger(config.maxFileBytes) || (config.maxFileBytes || 0) < minimumFileBytes || (config.maxFileBytes || 0) > staticConfig.maxFileBytes) {
-      throw new Error("The native host supplied an invalid Holvi account boundary.");
-    }
-    return config;
-  }
-  function validateUuid(value, resource) {
-    if (!uuidPattern2.test(value || "")) {
-      throw new Error(`A valid Holvi ${resource} UUID is required.`);
-    }
-    return value;
-  }
-
-  class BridgeSession {
-    staticConfig;
-    runtimeConfig = null;
-    hostIdentity = null;
-    constructor(staticConfig) {
-      this.staticConfig = staticConfig;
-    }
-    configure(value, protocolVersion = this.staticConfig.nativeProtocolVersion, hostVersion = this.staticConfig.extensionVersion) {
-      const identity = validateHostIdentity(protocolVersion, hostVersion, this.staticConfig);
-      const config = validateRuntimeConfig(value, this.staticConfig);
-      this.hostIdentity = identity;
-      this.runtimeConfig = config;
-      return config;
-    }
-    clear() {
-      this.runtimeConfig = null;
-      this.hostIdentity = null;
-    }
-    get identity() {
-      if (!this.hostIdentity) {
-        throw new Error("The local bridge has no native host identity.");
-      }
-      return this.hostIdentity;
-    }
-    get extensionVersion() {
-      return this.staticConfig.extensionVersion;
-    }
-    get optionalConfig() {
-      return this.runtimeConfig;
-    }
-    get config() {
-      if (!this.runtimeConfig) {
-        throw new Error("The local bridge has no configured Holvi account.");
-      }
-      return this.runtimeConfig;
-    }
-    requireCapabilities(...capabilities) {
-      if (!this.runtimeConfig || capabilities.some((capability) => !this.runtimeConfig?.capabilities.includes(capability))) {
-        throw new Error(`Action requires capabilities: ${capabilities.join(", ")}.`);
-      }
-    }
-    apiRoot() {
-      return `/api/pool/${encodeURIComponent(this.config.poolHandle)}/`;
-    }
   }
 
   // src/extension/attachment-deletion-workflow.ts
@@ -901,7 +1031,7 @@
     "connection_uuid",
     "attachments"
   ];
-  function record2(value, label) {
+  function record3(value, label) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error(`${label} has an unexpected shape.`);
     }
@@ -935,7 +1065,7 @@
     return JSON.stringify(normalize(value));
   }
   function parseSnapshot(value, debtUuid, itemUuid, paymentAccountUuid) {
-    const debt = record2(value, "Bookkeeping debt");
+    const debt = record3(value, "Bookkeeping debt");
     const responseDebtUuid = responseUuid(debt.uuid, "bookkeeping debt");
     if (!sameUuid(responseDebtUuid, debtUuid)) {
       throw new Error("Holvi bookkeeping debt UUID does not match the request.");
@@ -953,7 +1083,7 @@
     const matchingItems = [];
     const items = [];
     for (const [index, value2] of debt.items.entries()) {
-      const item = record2(value2, `Bookkeeping item ${index + 1}`);
+      const item = record3(value2, `Bookkeeping item ${index + 1}`);
       const responseItemUuid = responseUuid(item.uuid, `bookkeeping item ${index + 1}`);
       if (typeof item.type !== "string" || typeof item.active !== "boolean") {
         throw new Error(`Bookkeeping item ${index + 1} has an unexpected shape.`);
@@ -1173,6 +1303,7 @@
   var auditLimitMax = 5000;
   var auditPageSize = 25;
   var maxApiResponseBytes = 2 * 1024 * 1024;
+  var maxPaymentResponseBytes = 512 * 1024;
   var commentPageSize = 25;
   var maxCommentPages = 40;
   var maxCommentResults2 = 1000;
@@ -1180,11 +1311,11 @@
   function asString(value) {
     return typeof value === "string" ? value : "";
   }
-  async function boundedResponseText(response, maxResponseBytes) {
+  async function boundedResponseText(response, maxResponseBytes2) {
     const contentLength = response.headers.get("content-length");
     if (contentLength && /^\d+$/.test(contentLength)) {
       const declaredLength = Number(contentLength);
-      if (!Number.isSafeInteger(declaredLength) || declaredLength > maxResponseBytes) {
+      if (!Number.isSafeInteger(declaredLength) || declaredLength > maxResponseBytes2) {
         throw new Error("Holvi API response exceeded its size limit.");
       }
     }
@@ -1200,7 +1331,7 @@
         break;
       }
       length += value.byteLength;
-      if (length > maxResponseBytes) {
+      if (length > maxResponseBytes2) {
         await reader.cancel();
         throw new Error("Holvi API response exceeded its size limit.");
       }
@@ -1232,7 +1363,7 @@
       this.session = session;
       this.fetchRequest = fetchRequest;
     }
-    async request(auth, apiPath, options = {}, maxResponseBytes = maxApiResponseBytes) {
+    async request(auth, apiPath, options = {}, maxResponseBytes2 = maxApiResponseBytes) {
       if (!apiPath.startsWith(this.session.apiRoot())) {
         throw new Error("Refused an API path outside the configured Holvi account.");
       }
@@ -1251,7 +1382,7 @@
         redirect: "error"
       });
       const contentType = response.headers.get("content-type") || "";
-      const text = await boundedResponseText(response, maxResponseBytes);
+      const text = await boundedResponseText(response, maxResponseBytes2);
       let body = text;
       if (contentType.includes("application/json")) {
         try {
@@ -1284,6 +1415,51 @@
     }
     debtPath(debtUuid) {
       return `${this.session.apiRoot()}debt/${encodeURIComponent(validateUuid(debtUuid, "debt"))}/`;
+    }
+    paymentDebtCollectionPath() {
+      return `${this.session.apiRoot()}debt/`;
+    }
+    async createPaymentDebt(auth, payload) {
+      return this.request(auth, this.paymentDebtCollectionPath(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }, maxPaymentResponseBytes);
+    }
+    async readPaymentDebt(auth, debtUuid) {
+      return this.request(auth, this.debtPath(debtUuid), {}, maxPaymentResponseBytes);
+    }
+    async verifyPayee(auth, name, iban) {
+      const path = `/api/vop/${encodeURIComponent(this.session.config.poolHandle)}/payee-verification/`;
+      const expected = `/api/vop/${this.session.config.poolHandle}/payee-verification/`;
+      if (path !== expected) {
+        throw new Error("Refused an invalid payee-verification path.");
+      }
+      const headers = new Headers({
+        Accept: "application/json",
+        Authorization: `Bearer ${auth.token}`,
+        "Content-Type": "application/json"
+      });
+      if (auth.csrfToken)
+        headers.set("X-CSRFToken", auth.csrfToken);
+      const fetchRequest = this.fetchRequest;
+      const response = await fetchRequest(`${this.staticConfig.apiOrigin}${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name, iban }),
+        credentials: "include",
+        cache: "no-store",
+        redirect: "error"
+      });
+      const text = await boundedResponseText(response, 128 * 1024);
+      if (!response.ok) {
+        throw new Error(`Holvi payee verification returned ${response.status}.`);
+      }
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error("Holvi payee verification returned malformed JSON.");
+      }
     }
     cardPath(cardProfileUuid) {
       return `${this.session.apiRoot()}cardprofile/${encodeURIComponent(validateUuid(cardProfileUuid, "card profile"))}/`;
@@ -1870,6 +2046,462 @@
     }
   }
 
+  // src/extension/payment-workflow.ts
+  var digestPattern = /^[0-9a-f]{64}$/;
+  var paymentPollIntervalMs = 2000;
+  var paymentReferenceMaxBytes = 256;
+  var paymentBicMaxBytes = 11;
+  var confirmableStatuses = new Set(["unverified", "draft"]);
+  var confirmedStatuses = new Set(["verified", "paid"]);
+  var maxStringBytes = paymentReferenceMaxBytes;
+  function record4(value, label) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${label} has an unexpected shape.`);
+    }
+    return value;
+  }
+  function exactKeys(value, allowed, label) {
+    if (Object.keys(value).some((key) => !allowed.includes(key))) {
+      throw new Error(`${label} contains unsupported fields.`);
+    }
+  }
+  function boundedString2(value, label, maxBytes = maxStringBytes) {
+    if (typeof value !== "string" || !value.trim() || new TextEncoder().encode(value).byteLength > maxBytes) {
+      throw new Error(`${label} must be a nonempty bounded string.`);
+    }
+    return value.trim();
+  }
+  function mod97(value) {
+    let remainder = 0;
+    for (const character of value) {
+      const digits = /[A-Z]/.test(character) ? String(character.charCodeAt(0) - 55) : character;
+      for (const digit of digits)
+        remainder = (remainder * 10 + Number(digit)) % 97;
+    }
+    return remainder;
+  }
+  function normalizeIban(value) {
+    const iban = boundedString2(value, "IBAN", 64).replace(/\s/g, "").toUpperCase();
+    if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) {
+      throw new Error("IBAN has an invalid shape.");
+    }
+    if (mod97(`${iban.slice(4)}${iban.slice(0, 4)}`) !== 1)
+      throw new Error("IBAN checksum is invalid.");
+    return iban;
+  }
+  function normalizeAmount(value) {
+    const source = typeof value === "number" && Number.isFinite(value) ? String(value) : boundedString2(value, "Payment amount", 32);
+    const match = source.match(/^(\d{1,16})(?:\.(\d{1,2}))?$/);
+    if (!match)
+      throw new Error("Payment amount must be a positive EUR decimal.");
+    const whole = (match[1] || "0").replace(/^0+(?=\d)/, "");
+    const fraction = (match[2] || "").replace(/0+$/, "");
+    const amount = fraction ? `${whole}.${fraction}` : whole;
+    if (amount === "0")
+      throw new Error("Payment amount must be positive.");
+    return amount;
+  }
+  function paymentReference(value) {
+    const source = record4(value, "Payment reference");
+    exactKeys(source, ["kind", "value"], "Payment reference");
+    if (!["message", "rf", "finnish"].includes(source.kind)) {
+      throw new Error("Payment reference kind is unsupported.");
+    }
+    const kind = source.kind;
+    let normalized = boundedString2(source.value, "Payment reference");
+    if (kind === "rf") {
+      normalized = normalized.replace(/\s/g, "").toUpperCase();
+      if (!/^RF\d{2}[A-Z0-9]{1,21}$/.test(normalized) || mod97(`${normalized.slice(4)}${normalized.slice(0, 4)}`) !== 1) {
+        throw new Error("RF reference checksum is invalid.");
+      }
+    }
+    if (kind === "finnish") {
+      normalized = normalized.replace(/\s/g, "");
+      if (!/^\d{4,20}$/.test(normalized)) {
+        throw new Error("Finnish reference has an invalid shape.");
+      }
+      const body = normalized.slice(0, -1);
+      const check = Number(normalized.slice(-1));
+      const weights = [7, 3, 1];
+      const sum = body.split("").reverse().reduce((total, digit, index) => total + Number(digit) * (weights[index % weights.length] || 0), 0);
+      if ((10 - sum % 10) % 10 !== check) {
+        throw new Error("Finnish reference checksum is invalid.");
+      }
+    }
+    return { kind, value: normalized };
+  }
+  function createParams(value) {
+    exactKeys(value, [
+      "paymentAccountUuid",
+      "recipientName",
+      "iban",
+      "bic",
+      "amount",
+      "currency",
+      "reference",
+      "acceptPayeeWarning",
+      "confirmed"
+    ], "Payment creation parameters");
+    const bic = value.bic === null || value.bic === undefined || value.bic === "" ? null : boundedString2(value.bic, "BIC", paymentBicMaxBytes).toUpperCase();
+    if (bic && !/^[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?$/.test(bic)) {
+      throw new Error("BIC has an invalid shape.");
+    }
+    if (value.currency !== "EUR")
+      throw new Error("Payment currency must be EUR.");
+    if (typeof value.confirmed !== "boolean" || typeof value.acceptPayeeWarning !== "boolean") {
+      throw new Error("Payment confirmation flags are invalid.");
+    }
+    return {
+      paymentAccountUuid: validateUuid(boundedString2(value.paymentAccountUuid, "Payment account UUID", 64), "payment account").toLowerCase(),
+      recipientName: boundedString2(value.recipientName, "Recipient name"),
+      iban: normalizeIban(value.iban),
+      bic,
+      amount: normalizeAmount(value.amount),
+      currency: "EUR",
+      reference: paymentReference(value.reference),
+      acceptPayeeWarning: value.acceptPayeeWarning,
+      confirmed: value.confirmed
+    };
+  }
+  function sendParams(value) {
+    exactKeys(value, ["debtUuid", "reviewDigest", "acceptPayeeWarning", "confirmed"], "Payment sending parameters");
+    if (typeof value.confirmed !== "boolean" || typeof value.acceptPayeeWarning !== "boolean") {
+      throw new Error("Payment confirmation flags are invalid.");
+    }
+    const reviewDigest = value.reviewDigest === null || value.reviewDigest === undefined ? null : boundedString2(value.reviewDigest, "Review digest", 64);
+    if (reviewDigest !== null && !digestPattern.test(reviewDigest)) {
+      throw new Error("Review digest must be lowercase SHA-256 hex.");
+    }
+    if (value.confirmed && reviewDigest === null) {
+      throw new Error("Payment confirmation requires the review digest.");
+    }
+    return {
+      debtUuid: validateUuid(boundedString2(value.debtUuid, "Debt UUID", 64), "debt").toLowerCase(),
+      reviewDigest,
+      acceptPayeeWarning: value.acceptPayeeWarning,
+      confirmed: value.confirmed
+    };
+  }
+  function firstItemAmount(source) {
+    if (!Array.isArray(source.items) || source.items.length !== 1)
+      return;
+    const item = record4(source.items[0], "Payment item");
+    const price2 = record4(item.detailed_price, "Payment item price");
+    return price2.gross;
+  }
+  function debtReference(source) {
+    const candidates = [];
+    for (const [field, kind] of [
+      ["unstructured_reference", "message"],
+      ["rf_reference", "rf"],
+      ["fi_reference", "finnish"]
+    ]) {
+      if (typeof source[field] === "string" && source[field]) {
+        candidates.push(paymentReference({ kind, value: source[field] }));
+      }
+    }
+    if (candidates.length !== 1) {
+      throw new Error("Holvi payment debt has an ambiguous reference.");
+    }
+    return candidates[0];
+  }
+  function projectDebt(value, expectedUuid) {
+    const source = record4(value, "Payment debt");
+    const debtUuid = validateUuid(boundedString2(source.uuid, "Debt UUID", 64), "debt").toLowerCase();
+    if (debtUuid !== expectedUuid.toLowerCase())
+      throw new Error("Holvi payment debt UUID does not match.");
+    const receiver = record4(source.receiver, "Payment receiver");
+    const type = boundedString2(source.type, "Payment type");
+    const subtype = boundedString2(source.subtype, "Payment subtype");
+    if (type !== "outboundpayment" || subtype !== "outbound") {
+      throw new Error("Debt is not a supported outgoing SEPA payment.");
+    }
+    const statusValue = typeof source.status === "object" ? record4(source.status, "Payment status").value : source.status ?? source.state;
+    const status = boundedString2(statusValue, "Payment status", 64).toLowerCase();
+    const currency = boundedString2(source.currency, "Payment currency", 3);
+    if (currency !== "EUR")
+      throw new Error("Payment debt currency is unsupported.");
+    return {
+      debtUuid,
+      paymentAccountUuid: validateUuid(boundedString2(source.payment_account_uuid, "Payment account UUID", 64), "payment account").toLowerCase(),
+      recipient: {
+        name: boundedString2(receiver.name, "Recipient name"),
+        iban: normalizeIban(source.iban)
+      },
+      bic: source.bic ? boundedString2(source.bic, "BIC", paymentBicMaxBytes).toUpperCase() : null,
+      amount: normalizeAmount(source.total_amount_temp ?? source.amount ?? source.total ?? firstItemAmount(source)),
+      currency: "EUR",
+      reference: debtReference(source),
+      dueDate: source.due_date ? boundedString2(source.due_date, "Payment due date", 32) : null,
+      instant: source.sctinst_requested === true,
+      status,
+      type: "outboundpayment",
+      subtype: "outbound"
+    };
+  }
+  function projectPayeeVerification(value) {
+    const result = record4(value, "Payee verification").match_result;
+    if (!["match", "close-match", "no-match", "not-applicable"].includes(String(result))) {
+      throw new Error("Holvi payee verification result is unsupported.");
+    }
+    return result;
+  }
+  function enforcePayee(result, accepted) {
+    if (result === "match")
+      return;
+    if (result === "no-match" || !accepted) {
+      throw new Error(`Payee verification returned ${result}. Review the recipient and explicitly accept a supported warning.`);
+    }
+  }
+  function sameMaterial(left, right) {
+    const material = (debt) => JSON.stringify({
+      debtUuid: debt.debtUuid,
+      paymentAccountUuid: debt.paymentAccountUuid,
+      recipient: debt.recipient,
+      bic: debt.bic,
+      amount: debt.amount,
+      currency: debt.currency,
+      reference: debt.reference,
+      dueDate: debt.dueDate,
+      instant: debt.instant,
+      type: debt.type,
+      subtype: debt.subtype
+    });
+    return material(left) === material(right);
+  }
+  async function sha256(value) {
+    const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+  function equalDigest(left, right) {
+    if (left.length !== right.length)
+      return false;
+    let difference = 0;
+    for (let index = 0;index < left.length; index += 1) {
+      difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+    }
+    return difference === 0;
+  }
+
+  class PaymentWorkflow {
+    session;
+    api;
+    authProxy;
+    clock;
+    sleep;
+    constructor(session, api, authProxy, clock = Date.now, sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))) {
+      this.session = session;
+      this.api = api;
+      this.authProxy = authProxy;
+      this.clock = clock;
+      this.sleep = sleep;
+    }
+    async create(auth, raw) {
+      this.session.requireCapabilities("payments.write");
+      const params = createParams(raw);
+      const accounts = await this.api.accounts(auth);
+      const matches = accounts.results.filter((account) => String(account.paymentAccountUuid).toLowerCase() === params.paymentAccountUuid);
+      if (matches.length !== 1)
+        throw new Error("Payment account does not belong uniquely to the configured pool.");
+      const payeeVerification = projectPayeeVerification(await this.api.verifyPayee(auth, params.recipientName, params.iban));
+      const proposal = {
+        dryRun: !params.confirmed,
+        paymentAccountUuid: params.paymentAccountUuid,
+        recipient: { name: params.recipientName, iban: params.iban },
+        bic: params.bic,
+        amount: params.amount,
+        currency: params.currency,
+        reference: params.reference,
+        instant: false,
+        payeeVerification: { result: payeeVerification }
+      };
+      if (!params.confirmed) {
+        return {
+          ...proposal,
+          next: payeeVerification === "match" ? "Repeat with --yes after checking every value." : "Review the payee warning, then repeat the dry run with --accept-payee-warning before using --yes."
+        };
+      }
+      enforcePayee(payeeVerification, params.acceptPayeeWarning);
+      const referenceField = params.reference.kind === "message" ? { unstructured_reference: params.reference.value } : params.reference.kind === "rf" ? { rf_reference: params.reference.value } : { fi_reference: params.reference.value };
+      const payload = {
+        attachments: [],
+        receiver: {
+          name: params.recipientName,
+          contact: "",
+          code: "",
+          save_to_contacts: false
+        },
+        type: "outboundpayment",
+        subtype: "outbound",
+        currency: "EUR",
+        advanced_breakdown: false,
+        items: [
+          {
+            description: "",
+            category: "",
+            cost_center_uuid: null,
+            vat_calculation_rule: "unit_gross",
+            detailed_price: {
+              currency: "EUR",
+              net: params.amount,
+              gross: params.amount
+            }
+          }
+        ],
+        iban: params.iban,
+        bic: params.bic ?? "",
+        ...referenceField,
+        total_amount_temp: params.amount,
+        payment_account_uuid: params.paymentAccountUuid
+      };
+      let created;
+      try {
+        created = await this.api.createPaymentDebt(auth, payload);
+      } catch {
+        throw new Error("Payment draft creation failed or had an ambiguous outcome. Inspect Holvi before retrying.");
+      }
+      const createdRecord = record4(created, "Created payment debt");
+      const debtUuid = validateUuid(boundedString2(createdRecord.uuid, "Created debt UUID", 64), "debt").toLowerCase();
+      let debt;
+      try {
+        debt = projectDebt(await this.api.readPaymentDebt(auth, debtUuid), debtUuid);
+      } catch {
+        throw new Error("Holvi accepted the payment draft, but its authoritative state could not be verified. Inspect Holvi before retrying.");
+      }
+      if (debt.paymentAccountUuid !== params.paymentAccountUuid || debt.recipient.name !== params.recipientName || debt.recipient.iban !== params.iban || params.bic !== null && debt.bic !== params.bic || debt.amount !== params.amount || debt.currency !== params.currency || JSON.stringify(debt.reference) !== JSON.stringify(params.reference) || debt.dueDate !== null || debt.instant || !confirmableStatuses.has(debt.status)) {
+        throw new Error("Holvi created a payment draft whose authoritative fields differ from the request. Inspect Holvi before retrying.");
+      }
+      return {
+        ...proposal,
+        dryRun: false,
+        debtUuid,
+        status: debt.status,
+        verified: true
+      };
+    }
+    async send(auth, raw) {
+      this.session.requireCapabilities("payments.send");
+      const params = sendParams(raw);
+      const review = await this.review(auth, params);
+      if (!params.confirmed) {
+        return {
+          dryRun: true,
+          ...review.projection,
+          reviewDigest: review.digest,
+          next: review.payeeVerification === "match" ? "Repeat with --review-digest and --yes after checking every value." : "Review the payee warning, then repeat the dry run with --accept-payee-warning before using --review-digest and --yes."
+        };
+      }
+      if (!params.reviewDigest || !equalDigest(params.reviewDigest, review.digest)) {
+        throw new Error("Payment changed after review. Run the send dry run again.");
+      }
+      enforcePayee(review.payeeVerification, params.acceptPayeeWarning);
+      let confirmation;
+      try {
+        confirmation = await this.authProxy.initiatePaymentConfirmation(auth, params.debtUuid);
+      } catch {
+        const debt = await this.readDebtOrNull(auth, params.debtUuid);
+        if (debt && confirmedStatuses.has(debt.status) && sameMaterial(review.debt, debt)) {
+          return this.confirmedResult(debt);
+        }
+        throw new Error("Payment confirmation initiation failed or had an ambiguous outcome. Inspect Holvi before retrying.");
+      }
+      if (!confirmation.hasMobileDevice) {
+        await this.authProxy.cancel(confirmation).catch(() => {
+          return;
+        });
+        throw new Error("Payment confirmation requires a Holvi mobile-app device. Use Holvi's UI for another verification method.");
+      }
+      const deadline = Math.min(this.clock() + 285000, this.clock() + confirmation.expirationSeconds * 1000);
+      let approved = false;
+      try {
+        while (this.clock() < deadline) {
+          const status = await this.authProxy.status(confirmation);
+          if (status.state === "activated") {
+            approved = true;
+            break;
+          }
+          if (status.state === "cancelled")
+            throw new Error("Payment confirmation was canceled.");
+          if (status.state === "rejected")
+            throw new Error("Payment confirmation was rejected.");
+          if (status.state === "expired")
+            throw new Error("Payment confirmation expired.");
+          await this.sleep(paymentPollIntervalMs);
+        }
+        if (!approved)
+          throw new Error("Payment confirmation timed out.");
+      } catch (error) {
+        if (!approved)
+          await this.authProxy.cancel(confirmation).catch(() => {
+            return;
+          });
+        const debt = await this.readDebtOrNull(auth, params.debtUuid);
+        if (debt && confirmedStatuses.has(debt.status) && sameMaterial(review.debt, debt)) {
+          return this.confirmedResult(debt);
+        }
+        if (!debt) {
+          throw new Error(`${error instanceof Error ? error.message : "Payment confirmation ended."} The resulting payment state is unknown. Inspect Holvi before retrying.`);
+        }
+        throw error;
+      }
+      const finalDebt = await this.readDebtOrNull(auth, params.debtUuid);
+      if (!finalDebt) {
+        throw new Error("Holvi approved 2FA, but the resulting payment state is unknown. Inspect Holvi before retrying.");
+      }
+      if (!sameMaterial(review.debt, finalDebt) || !confirmedStatuses.has(finalDebt.status)) {
+        throw new Error("Holvi approved 2FA, but the resulting payment state could not be verified. Inspect Holvi before retrying.");
+      }
+      return this.confirmedResult(finalDebt);
+    }
+    async review(auth, params) {
+      const debt = projectDebt(await this.api.readPaymentDebt(auth, params.debtUuid), params.debtUuid);
+      if (!confirmableStatuses.has(debt.status) || debt.instant) {
+        throw new Error("Payment debt is not in a confirmable one-off SEPA state.");
+      }
+      const accounts = await this.api.accounts(auth);
+      const matches = accounts.results.filter((account) => String(account.paymentAccountUuid).toLowerCase() === debt.paymentAccountUuid);
+      if (matches.length !== 1)
+        throw new Error("Payment account does not belong uniquely to the configured pool.");
+      const payeeVerification = projectPayeeVerification(await this.api.verifyPayee(auth, debt.recipient.name, debt.recipient.iban));
+      const projection2 = {
+        debtUuid: debt.debtUuid,
+        paymentAccountUuid: debt.paymentAccountUuid,
+        recipient: debt.recipient,
+        bic: debt.bic,
+        amount: debt.amount,
+        currency: debt.currency,
+        reference: debt.reference,
+        dueDate: debt.dueDate,
+        instant: debt.instant,
+        status: debt.status,
+        payeeVerification: { result: payeeVerification },
+        acceptPayeeWarning: params.acceptPayeeWarning
+      };
+      return {
+        debt,
+        projection: projection2,
+        digest: await sha256(JSON.stringify(projection2)),
+        payeeVerification
+      };
+    }
+    async readDebtOrNull(auth, debtUuid) {
+      try {
+        return projectDebt(await this.api.readPaymentDebt(auth, debtUuid), debtUuid);
+      } catch {
+        return null;
+      }
+    }
+    confirmedResult(debt) {
+      return {
+        debtUuid: debt.debtUuid,
+        confirmation: "approved",
+        verified: true,
+        status: debt.status,
+        paymentAccountUuid: debt.paymentAccountUuid
+      };
+    }
+  }
+
   // src/extension/commands.ts
   function asString2(value) {
     return typeof value === "string" ? value : "";
@@ -1895,6 +2527,7 @@
     attachmentDeletion;
     bookkeepingDescriptions;
     comments;
+    payments;
     constructor(session, api, requestAuth) {
       this.session = session;
       this.api = api;
@@ -1902,6 +2535,7 @@
       this.attachmentDeletion = new AttachmentDeletionWorkflow(session, api);
       this.bookkeepingDescriptions = new BookkeepingDescriptionWorkflow(session, api);
       this.comments = new CommentWorkflow(session, api);
+      this.payments = new PaymentWorkflow(session, api, new AuthProxyClient("https://holvi.com"));
       this.handlers = {
         doctor: (auth) => this.doctor(auth),
         "transactions.list": (auth, params) => this.api.listTransactions(auth, params),
@@ -1926,7 +2560,9 @@
           confirmed: asBoolean(params.confirmed)
         }),
         "audit.types": (auth) => this.api.auditTypes(auth),
-        "audit.list": (auth, params) => this.api.historicalAudit(auth, params)
+        "audit.list": (auth, params) => this.api.historicalAudit(auth, params),
+        "payments.create": (auth, params) => this.payments.create(auth, params),
+        "payments.send": (auth, params) => this.payments.send(auth, params)
       };
     }
     async handle(message) {

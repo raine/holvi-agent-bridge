@@ -2,7 +2,7 @@ use serde::ser::{Serialize, SerializeMap, Serializer};
 
 use crate::protocol::Action;
 
-pub const ACTION_CAPABILITIES: [(&str, &[&str]); 23] = [
+pub const ACTION_CAPABILITIES: [(&str, &[&str]); 25] = [
     ("doctor", &[]),
     ("transactions.list", &["transactions.read"]),
     ("transactions.get", &["transactions.read"]),
@@ -35,6 +35,8 @@ pub const ACTION_CAPABILITIES: [(&str, &[&str]); 23] = [
     ("bookkeeping.set-description", &["bookkeeping.write"]),
     ("audit.types", &["audit.read"]),
     ("audit.list", &["audit.read"]),
+    ("payments.create", &["payments.write"]),
+    ("payments.send", &["payments.send"]),
 ];
 
 pub fn required_capabilities(action: &Action) -> &'static [&'static str] {
@@ -61,6 +63,8 @@ pub fn required_capabilities(action: &Action) -> &'static [&'static str] {
         | Action::BookkeepingSuggestions(_) => &["bookkeeping.read"],
         Action::BookkeepingSetDescription(_) => &["bookkeeping.write"],
         Action::AuditTypes(_) | Action::AuditList(_) => &["audit.read"],
+        Action::PaymentCreate(_) => &["payments.write"],
+        Action::PaymentSend(_) => &["payments.send"],
     }
 }
 
@@ -241,6 +245,23 @@ mod tests {
                 query: None,
                 limit: 1,
                 max_pages: 1,
+            }),
+            Action::PaymentCreate(PaymentCreateParams {
+                payment_account_uuid: String::new(),
+                recipient_name: String::new(),
+                iban: String::new(),
+                bic: None,
+                amount: String::new(),
+                currency: "EUR".into(),
+                reference: PaymentReference::Message(String::new()),
+                accept_payee_warning: false,
+                confirmed: false,
+            }),
+            Action::PaymentSend(PaymentSendParams {
+                debt_uuid: String::new(),
+                review_digest: None,
+                accept_payee_warning: false,
+                confirmed: false,
             }),
         ];
         let typed: Vec<_> = actions
