@@ -117,10 +117,17 @@ approved folders.
 
 ## Output modes
 
-Data commands print concise, labeled human-readable output by default. This
-output sanitizes untrusted terminal text while preserving documented values.
-Pass `--json` to a data command for its stable structured response and exact
-field types needed by machine integrations.
+Data commands print concise, command-aware human-readable output by default.
+Collections use compact responsive tables, detail commands use ordered sections,
+and writes distinguish previews, reviews, accepted requests, and verified
+results. Untrusted terminal text is sanitized while documented values are
+preserved. Pass `--json` for the stable structured response and exact field
+types needed by machine integrations.
+
+Warnings call out incomplete listings and dangerous or ambiguous operations.
+Empty collections have explicit messages, optional fields do not create noisy
+placeholder rows, and narrow terminals hide lower-priority table columns with a
+note directing users to `--json`.
 
 Commands whose result is intentionally plain stay plain. In particular,
 `config path` prints a path, `skill` prints the installed skill text, and file

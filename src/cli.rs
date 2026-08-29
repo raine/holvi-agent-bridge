@@ -24,6 +24,7 @@ use crate::config::{
     validate_uuid,
 };
 use crate::filesystem::{has_mode_0600, is_owned_by_current_user, is_socket};
+use crate::human_output::Kind as HumanOutputKind;
 use crate::install::{HostRestartStatus, InstallOptions, InstallResult, install_bridge};
 use crate::protocol::{
     Action, AttachmentDeleteParams, AttachmentDownloadParams, AuditListParams,
@@ -788,7 +789,7 @@ pub async fn run() -> Result<()> {
                     }),
                 )
                 .await?;
-                print_data("holvi transactions list", &result, args.json)?;
+                print_data(HumanOutputKind::TransactionsList, &result, args.json)?;
             }
             TransactionCommand::Get(args) => {
                 let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
@@ -797,7 +798,7 @@ pub async fn run() -> Result<()> {
                     Action::TransactionsGet(DebtParams { debt_uuid }),
                 )
                 .await?;
-                print_data("holvi transactions get", &result, args.json)?;
+                print_data(HumanOutputKind::TransactionsGet, &result, args.json)?;
             }
             TransactionCommand::Comments { command } => match command {
                 CommentCommand::List(args) => {
@@ -807,7 +808,7 @@ pub async fn run() -> Result<()> {
                         Action::CommentsList(DebtParams { debt_uuid }),
                     )
                     .await?;
-                    print_data("holvi transactions comments list", &result, args.json)?;
+                    print_data(HumanOutputKind::CommentsList, &result, args.json)?;
                 }
                 CommentCommand::Create(args) => {
                     let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
@@ -829,7 +830,7 @@ pub async fn run() -> Result<()> {
                         .await?;
                         comment_dry_run(preview, args.content)
                     };
-                    print_data("holvi transactions comments create", &result, args.json)?;
+                    print_data(HumanOutputKind::CommentsCreate, &result, args.json)?;
                 }
             },
         },
@@ -837,14 +838,14 @@ pub async fn run() -> Result<()> {
             AccountsCommand::List(args) => {
                 let result =
                     request_host(&config.hmac_secret, Action::AccountsList(EmptyParams {})).await?;
-                print_data("holvi accounts list", &result, args.json)?;
+                print_data(HumanOutputKind::AccountsList, &result, args.json)?;
             }
         },
         Command::Reports { command } => match command {
             ReportsCommand::Types(args) => {
                 let result =
                     request_host(&config.hmac_secret, Action::ReportsTypes(EmptyParams {})).await?;
-                print_data("holvi reports types", &result, args.json)?;
+                print_data(HumanOutputKind::ReportsTypes, &result, args.json)?;
             }
             ReportsCommand::Export(args) => {
                 ensure!(args.from <= args.to, "--from must be on or before --to.");
@@ -872,7 +873,7 @@ pub async fn run() -> Result<()> {
                         }),
                     )
                     .await?;
-                    print_data("holvi reports jobs list", &result, args.json)?;
+                    print_data(HumanOutputKind::ReportJobsList, &result, args.json)?;
                 }
                 ReportJobsCommand::Get(args) => {
                     let result = request_host(
@@ -882,7 +883,7 @@ pub async fn run() -> Result<()> {
                         }),
                     )
                     .await?;
-                    print_data("holvi reports jobs get", &result, args.json)?;
+                    print_data(HumanOutputKind::ReportJobsGet, &result, args.json)?;
                 }
                 ReportJobsCommand::Download(args) => {
                     let result = request_host(
@@ -912,7 +913,7 @@ pub async fn run() -> Result<()> {
                     } else {
                         json!({"dryRun": true, "report": {"type": args.report_type, "from": args.from, "to": args.to, "pool": config.pool_handle, "paymentAccountUuid": args.account}, "next": "Repeat the report job creation command with --yes after checking these values."})
                     };
-                    print_data("holvi reports jobs create", &result, args.json)?;
+                    print_data(HumanOutputKind::ReportJobsCreate, &result, args.json)?;
                 }
             },
         },
@@ -944,7 +945,7 @@ pub async fn run() -> Result<()> {
                         "next": "Repeat the attachment upload command with --yes after checking these values.",
                     })
                 };
-                print_data("holvi attachments upload", &result, args.json)?;
+                print_data(HumanOutputKind::AttachmentUpload, &result, args.json)?;
             }
             AttachmentsCommand::Download(args) => {
                 let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
@@ -972,7 +973,7 @@ pub async fn run() -> Result<()> {
                     }),
                 )
                 .await?;
-                print_data("holvi attachments delete", &result, args.json)?;
+                print_data(HumanOutputKind::AttachmentDelete, &result, args.json)?;
             }
         },
         Command::Bookkeeping { command } => match command {
@@ -993,7 +994,7 @@ pub async fn run() -> Result<()> {
                     }),
                 )
                 .await?;
-                print_data("holvi bookkeeping list", &result, args.json)?;
+                print_data(HumanOutputKind::BookkeepingList, &result, args.json)?;
             }
             BookkeepingCommand::Get(args) => {
                 let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
@@ -1002,7 +1003,7 @@ pub async fn run() -> Result<()> {
                     Action::BookkeepingGet(DebtParams { debt_uuid }),
                 )
                 .await?;
-                print_data("holvi bookkeeping get", &result, args.json)?;
+                print_data(HumanOutputKind::BookkeepingGet, &result, args.json)?;
             }
             BookkeepingCommand::Categories(args) => {
                 let result = request_host(
@@ -1010,7 +1011,7 @@ pub async fn run() -> Result<()> {
                     Action::BookkeepingCategories(EmptyParams {}),
                 )
                 .await?;
-                print_data("holvi bookkeeping categories", &result, args.json)?;
+                print_data(HumanOutputKind::BookkeepingCategories, &result, args.json)?;
             }
             BookkeepingCommand::Suggestions(args) => {
                 let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
@@ -1019,7 +1020,7 @@ pub async fn run() -> Result<()> {
                     Action::BookkeepingSuggestions(DebtParams { debt_uuid }),
                 )
                 .await?;
-                print_data("holvi bookkeeping suggestions", &result, args.json)?;
+                print_data(HumanOutputKind::BookkeepingSuggestions, &result, args.json)?;
             }
             BookkeepingCommand::SetDescription(args) => {
                 let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
@@ -1034,14 +1035,18 @@ pub async fn run() -> Result<()> {
                     }),
                 )
                 .await?;
-                print_data("holvi bookkeeping set-description", &result, args.json)?;
+                print_data(
+                    HumanOutputKind::BookkeepingSetDescription,
+                    &result,
+                    args.json,
+                )?;
             }
         },
         Command::Audit { command } => match command {
             AuditCommand::Types(args) => {
                 let result =
                     request_host(&config.hmac_secret, Action::AuditTypes(EmptyParams {})).await?;
-                print_data("holvi audit types", &result, args.json)?;
+                print_data(HumanOutputKind::AuditTypes, &result, args.json)?;
             }
             AuditCommand::List(args) => {
                 ensure!(args.from <= args.to, "--from must be on or before --to.");
@@ -1057,7 +1062,7 @@ pub async fn run() -> Result<()> {
                     }),
                 )
                 .await?;
-                print_data("holvi audit list", &result, args.json)?;
+                print_data(HumanOutputKind::AuditList, &result, args.json)?;
             }
         },
         Command::Payments { command } => match command {
@@ -1082,7 +1087,7 @@ pub async fn run() -> Result<()> {
                     }),
                 )
                 .await?;
-                print_data("holvi payments create", &result, args.json)?;
+                print_data(HumanOutputKind::PaymentsCreate, &result, args.json)?;
             }
             PaymentsCommand::Send(args) => {
                 let debt_uuid = parse_debt_target(&args.debt, &config.group_path_segment)?;
@@ -1103,7 +1108,7 @@ pub async fn run() -> Result<()> {
                     }),
                 )
                 .await?;
-                print_data("holvi payments send", &result, args.json)?;
+                print_data(HumanOutputKind::PaymentsSend, &result, args.json)?;
             }
         },
     }
@@ -1460,6 +1465,11 @@ impl ReportRenderer {
         writeln!(output, "{}", self.paint(title, "1;38;2;45;174;135")).unwrap();
     }
 
+    fn write_summary(self, output: &mut String, summary: &str) {
+        output.push('\n');
+        writeln!(output, "{}", self.paint(summary, "1;37")).unwrap();
+    }
+
     fn write_heading(self, output: &mut String, title: &str) {
         output.push('\n');
         writeln!(output, "{}", self.paint(title, "1;36")).unwrap();
@@ -1578,6 +1588,7 @@ impl ReportRow {
 fn format_install(result: &InstallResult, renderer: ReportRenderer) -> String {
     let mut output = String::new();
     renderer.write_title(&mut output, "holvi install");
+    renderer.write_summary(&mut output, "Bridge files installed");
     renderer.write_section(
         &mut output,
         "Installation",
@@ -1632,6 +1643,24 @@ fn format_capabilities(
 ) -> String {
     let mut output = String::new();
     renderer.write_title(&mut output, "holvi capabilities");
+    let enabled_capabilities = capabilities.len();
+    let enabled_operations = actions.iter().filter(|(_, enabled)| *enabled).count();
+    renderer.write_summary(
+        &mut output,
+        &format!(
+            "{} · {} · no Holvi request made",
+            count_label(
+                enabled_capabilities,
+                "capability enabled",
+                "capabilities enabled"
+            ),
+            count_label(
+                enabled_operations,
+                "operation available",
+                "operations available"
+            )
+        ),
+    );
     let capability_rows = SUPPORTED_CAPABILITIES
         .iter()
         .map(|capability| {
@@ -1674,6 +1703,14 @@ fn count_label(count: usize, singular: &str, plural: &str) -> String {
 fn format_doctor(doctor: DoctorResult, renderer: ReportRenderer) -> String {
     let mut output = String::new();
     renderer.write_title(&mut output, "holvi doctor");
+    renderer.write_summary(
+        &mut output,
+        &format!(
+            "All checks passed · {} · {}",
+            doctor.group_path_segment,
+            count_label(doctor.capabilities.len(), "capability", "capabilities")
+        ),
+    );
     renderer.write_section(
         &mut output,
         "Connection",
@@ -1775,11 +1812,11 @@ fn print_json(value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn print_data(title: &str, value: &Value, json_output: bool) -> Result<()> {
+fn print_data(kind: HumanOutputKind, value: &Value, json_output: bool) -> Result<()> {
     if json_output {
         print_json(value)
     } else {
-        print!("{}", format_data(title, value, ReportRenderer::auto()));
+        print!("{}", crate::human_output::render(kind, value)?);
         Ok(())
     }
 }
@@ -1794,86 +1831,6 @@ fn print_path_result(value: &Value, json_output: bool) -> Result<()> {
         .context("Holvi Agent Bridge download response did not contain a path.")?;
     println!("{}", sanitize_terminal_text(path));
     Ok(())
-}
-
-fn human_label(key: &str) -> String {
-    let mut output = String::new();
-    for character in key.chars() {
-        if character == '_' || character == '-' {
-            output.push(' ');
-        } else if character.is_uppercase() && !output.is_empty() {
-            output.push(' ');
-            output.extend(character.to_lowercase());
-        } else {
-            output.push(character);
-        }
-    }
-    output
-}
-
-fn human_scalar(value: &Value) -> String {
-    let rendered = match value {
-        Value::Null => "unavailable".to_owned(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => value.to_string(),
-        Value::String(value) => value.clone(),
-        Value::Array(_) | Value::Object(_) => unreachable!("compound value rendered as scalar"),
-    };
-    sanitize_terminal_text(&rendered)
-}
-
-fn write_human_value(output: &mut String, value: &Value, indent: usize) {
-    let padding = " ".repeat(indent);
-    match value {
-        Value::Object(fields) => {
-            if fields.is_empty() {
-                writeln!(output, "{padding}(none)").unwrap();
-            }
-            for (field, item) in fields {
-                let label = sanitize_terminal_text(&human_label(field));
-                match item {
-                    Value::Array(items) => {
-                        writeln!(output, "{padding}{label} ({}):", items.len()).unwrap();
-                        write_human_array(output, items, indent + 2);
-                    }
-                    Value::Object(_) => {
-                        writeln!(output, "{padding}{label}:").unwrap();
-                        write_human_value(output, item, indent + 2);
-                    }
-                    _ => {
-                        writeln!(output, "{padding}{label}: {}", human_scalar(item)).unwrap();
-                    }
-                }
-            }
-        }
-        Value::Array(items) => write_human_array(output, items, indent),
-        _ => writeln!(output, "{padding}{}", human_scalar(value)).unwrap(),
-    }
-}
-
-fn write_human_array(output: &mut String, items: &[Value], indent: usize) {
-    let padding = " ".repeat(indent);
-    if items.is_empty() {
-        writeln!(output, "{padding}(none)").unwrap();
-        return;
-    }
-    for item in items {
-        match item {
-            Value::Object(_) | Value::Array(_) => {
-                writeln!(output, "{padding}-").unwrap();
-                write_human_value(output, item, indent + 2);
-            }
-            _ => writeln!(output, "{padding}- {}", human_scalar(item)).unwrap(),
-        }
-    }
-}
-
-fn format_data(title: &str, value: &Value, renderer: ReportRenderer) -> String {
-    let mut output = String::new();
-    renderer.write_title(&mut output, &sanitize_terminal_text(title));
-    output.push('\n');
-    write_human_value(&mut output, value, 0);
-    output
 }
 
 #[cfg(test)]
@@ -2373,30 +2330,6 @@ mod tests {
     }
 
     #[test]
-    fn renders_structured_data_as_labeled_sanitized_human_text() {
-        let value = json!({
-            "count": 1,
-            "results": [{
-                "counterparty": "Merchant\n\u{1b}[31mspoof",
-                "amount": "12.30",
-                "recipient": {"iban": "FI2112345600000785"}
-            }]
-        });
-
-        let output = format_data("holvi transactions list", &value, ReportRenderer::plain());
-
-        assert!(output.starts_with("holvi transactions list\n\ncount: 1\nresults (1):\n"));
-        assert!(output.contains("counterparty: Merchant��[31mspoof"));
-        assert!(output.contains("iban: FI2112345600000785"));
-        assert!(
-            !output
-                .chars()
-                .any(|character| character != '\n' && character.is_control())
-        );
-        assert!(!output.contains('{'));
-    }
-
-    #[test]
     fn explicit_json_preserves_exact_and_untrusted_values() {
         let value = json!({
             "recipient": {"iban": "FI2112345600000785"},
@@ -2445,7 +2378,9 @@ mod tests {
             ReportRenderer::plain(),
         );
 
-        assert!(output.starts_with("holvi capabilities\n\nCapabilities\n------------\n"));
+        assert!(output.starts_with(
+            "holvi capabilities\n\n2 capabilities enabled · 6 operations available · no Holvi request made\n\nCapabilities\n------------\n"
+        ));
         assert!(
             output
                 .lines()
@@ -2536,7 +2471,7 @@ mod tests {
         );
 
         assert!(output.starts_with(
-            "\x1b[1;38;2;45;174;135mholvi doctor\x1b[0m\n\n\x1b[1;36mConnection\x1b[0m\n"
+            "\x1b[1;38;2;45;174;135mholvi doctor\x1b[0m\n\n\x1b[1;37mAll checks passed · AbC123+example-company · 1 capability\x1b[0m\n\n\x1b[1;36mConnection\x1b[0m\n"
         ));
         assert!(output.contains("\x1b[1;32m✓\x1b[0m"));
         assert!(output.contains("\x1b[1;90m·\x1b[0m"));
@@ -2579,7 +2514,9 @@ mod tests {
         let output = format_install(&result, ReportRenderer::plain());
 
         assert!(
-            output.starts_with("holvi install\n\nInstallation\n------------\n  ok config file")
+            output.starts_with(
+                "holvi install\n\nBridge files installed\n\nInstallation\n------------\n  ok config file"
+            )
         );
         assert!(output.contains("/support/config.json"));
         assert!(output.contains("  .. extension id     extension-id\n"));

@@ -5,6 +5,7 @@ mod config;
 mod contract_tests;
 mod filesystem;
 mod host;
+mod human_output;
 mod install;
 mod protocol;
 mod receipt_sandbox;
@@ -18,6 +19,10 @@ pub mod bridge {
         Action, AuditListParams, EmptyParams, NativeMessageDecoder, SignedBridgeRequest,
         encode_native_message, sign_request,
     };
+}
+
+pub fn sanitize_error(error: &str) -> String {
+    human_output::sanitize_inline(error)
 }
 
 pub async fn run(arguments: Vec<String>) -> Result<()> {
