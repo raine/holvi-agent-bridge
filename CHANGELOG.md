@@ -3,7 +3,7 @@ title: Changelog
 description: Release notes for Holvi Agent Bridge.
 ---
 
-## Unreleased
+## v0.1.5 (2026-08-29)
 
 - Include exact payment timing, direction, status, recipient bank details,
   structured references, scheduling, and transaction classification in
