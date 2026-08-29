@@ -302,6 +302,15 @@
     }
     return uuid(value, label);
   }
+  function optionalBoolean(value, label) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    if (typeof value !== "boolean") {
+      throw new Error(`${label} must be a boolean.`);
+    }
+    return value;
+  }
   function decimal(value, label) {
     if (value === null || value === undefined || value === "") {
       return null;
@@ -493,12 +502,33 @@
     } : null;
     const creator = optionalRecord(debt.creator, "Transaction detail creator");
     const cardProfileUuid = optionalUuid(links.card_profile, "Transaction detail card profile UUID");
+    const status = debt.status && typeof debt.status === "object" ? optionalString(record2(debt.status, "Transaction status").value, "Transaction status") : optionalString(debt.status ?? debt.state, "Transaction status");
+    const referenceFields = [
+      ["finnish", debt.fi_reference],
+      ["rf", debt.rf_reference],
+      ["message", debt.unstructured_reference]
+    ];
+    const referenceCandidates = referenceFields.map(([kind, value2]) => ({
+      kind,
+      value: optionalString(value2, `Transaction ${kind} reference`)
+    })).filter((candidate) => candidate.value !== null);
+    if (referenceCandidates.length > 1) {
+      throw new Error("Transaction has ambiguous payment references.");
+    }
     return projection({
       debtUuid: requestedUuid,
       paymentAccountUuid: responseAccount,
       valueDate: optionalDate(debt.value_date, "Transaction value date"),
       bookingDate: optionalDate(debt.booking_date, "Transaction booking date"),
       counterparty: optionalString(debt.counterparty_name, "Transaction counterparty"),
+      recipientIban: optionalString(debt.iban, "Transaction recipient IBAN"),
+      recipientBic: optionalString(debt.bic, "Transaction recipient BIC"),
+      reference: referenceCandidates[0] ?? null,
+      dueDate: optionalDate(debt.due_date, "Transaction due date"),
+      instant: optionalBoolean(debt.sctinst_requested, "Instant payment flag"),
+      status,
+      type: optionalString(debt.type, "Transaction type"),
+      subtype: optionalString(debt.subtype, "Transaction subtype"),
       archiveIdentifier: optionalString(debt.code, "Holvi archive identifier"),
       cardProfileUuid,
       cardholder: cardProfileUuid ? optionalString(creator.displayname, "Transaction detail cardholder") : null,
@@ -561,14 +591,23 @@
       throw new Error("Holvi transaction payment UUID does not match the request.");
     }
     const counterparty = optionalRecord(payment2.counterparty, "Transaction payment counterparty");
-    const bookingDate = optionalDate(payment2.booking_date ?? payment2.ux_timestamp, "Transaction booking date");
-    const valueDate = optionalDate(payment2.value_date ?? payment2.ux_timestamp, "Transaction value date");
+    const paymentTimestamp = timestamp(payment2.ux_timestamp, "Transaction payment timestamp");
+    const bookingDate = optionalDate(payment2.booking_date ?? paymentTimestamp, "Transaction booking date");
+    const valueDate = optionalDate(payment2.value_date ?? paymentTimestamp, "Transaction value date");
+    const bankReference = optionalString(payment2.structured_reference, "Transaction bank reference");
+    const message = optionalString(payment2.unstructured_reference, "Transaction payment message");
+    const reference = bankReference ? {
+      kind: /^RF/i.test(bankReference) ? "rf" : "finnish",
+      value: bankReference
+    } : message ? { kind: "message", value: message } : null;
     return projection({
+      timestamp: paymentTimestamp,
       valueDate,
       bookingDate,
       counterparty: optionalString(counterparty.display_name, "Transaction payment counterparty name"),
-      bankReference: optionalString(payment2.structured_reference, "Transaction bank reference"),
-      message: optionalString(payment2.unstructured_reference, "Transaction payment message")
+      bankReference,
+      message,
+      reference
     });
   }
   function projectTransactionDetails(value) {
@@ -1519,10 +1558,10 @@
         results
       });
     }
-    async paymentUuidForDebt(auth, debtUuid) {
+    async paymentForDebt(auth, debtUuid) {
       const seenCursors = new Set;
       let cursor = "";
-      let paymentUuid = null;
+      let matchedPayment = null;
       let pages = 0;
       let results = 0;
       do {
@@ -1533,11 +1572,11 @@
           throw new Error("The transaction lookup exceeded its result limit.");
         }
         const matches = page.results.filter((item) => typeof item.debtUuid === "string" && item.debtUuid.toLowerCase() === debtUuid.toLowerCase());
-        if (matches.length > 1 || matches.length === 1 && paymentUuid !== null) {
+        if (matches.length > 1 || matches.length === 1 && matchedPayment !== null) {
           throw new Error("Holvi returned an ambiguous payment match.");
         }
         if (matches.length === 1) {
-          paymentUuid = asString(matches[0]?.paymentUuid) || null;
+          matchedPayment = matches[0] ?? null;
         }
         if (pages >= this.staticConfig.maxTransactionPages && page.hasMore) {
           throw new Error("The transaction lookup exceeded its page limit.");
@@ -1548,7 +1587,7 @@
         }
         seenCursors.add(cursor);
       } while (cursor);
-      return paymentUuid;
+      return matchedPayment;
     }
     async transactionDetails(auth, debtUuid) {
       const validUuid = validateUuid(debtUuid, "debt");
@@ -1556,21 +1595,32 @@
       const debtValue = await this.request(auth, this.debtPath(validUuid));
       const debt = projectTransactionDetailDebt(debtValue, validUuid, paymentAccountUuid);
       const preview = projectDebtPreview(debtValue, validUuid, paymentAccountUuid);
-      const [paymentUuid, account, card] = await Promise.all([
-        this.paymentUuidForDebt(auth, validUuid),
+      const [payment2, account, card] = await Promise.all([
+        this.paymentForDebt(auth, validUuid),
         this.request(auth, this.session.apiRoot()).then((value) => projectTransactionAccount(value, paymentAccountUuid)),
         debt.cardProfileUuid ? this.request(auth, this.cardPath(debt.cardProfileUuid)).then((value) => projectTransactionCard(value, debt.cardProfileUuid, paymentAccountUuid)) : Promise.resolve(null)
       ]);
+      const paymentUuid = asString(payment2?.paymentUuid) || null;
       const paymentMetadata = paymentUuid ? projectTransactionPaymentMetadata(await this.request(auth, this.paymentDetailPath(paymentUuid)), paymentUuid) : null;
       return projectTransactionDetails({
         ...preview,
         paymentUuid,
         debtUuid: debt.debtUuid,
+        timestamp: paymentMetadata?.timestamp ?? null,
         valueDate: debt.valueDate ?? paymentMetadata?.valueDate ?? null,
         bookingDate: debt.bookingDate ?? paymentMetadata?.bookingDate ?? null,
+        direction: asString(payment2?.direction) || null,
+        status: debt.status ?? (asString(payment2?.state) || null),
         counterparty: debt.counterparty ?? paymentMetadata?.counterparty ?? preview.counterparty,
+        recipientIban: debt.recipientIban,
+        recipientBic: debt.recipientBic,
+        reference: debt.reference ?? paymentMetadata?.reference ?? null,
         bankReference: paymentMetadata?.bankReference ?? null,
         message: paymentMetadata?.message ?? null,
+        dueDate: debt.dueDate,
+        instant: debt.instant,
+        type: debt.type,
+        subtype: debt.subtype,
         archiveIdentifier: debt.archiveIdentifier,
         card,
         account,

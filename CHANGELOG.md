@@ -5,6 +5,9 @@ description: Release notes for Holvi Agent Bridge.
 
 ## Unreleased
 
+- Include exact payment timing, direction, status, recipient bank details,
+  structured references, scheduling, and transaction classification in
+  `transactions get` output for payment and invoice reconciliation.
 - Print terminal-safe, labeled human output for data commands by default and
   support stable structured responses through `--json` across all command
   groups. Human output masks IBANs while explicit JSON retains documented full

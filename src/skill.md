@@ -99,10 +99,12 @@ holvi reports types --json
   passing identifiers to a later command. Without `--json`, every data command
   uses concise human-readable output.
 - `transactions get` returns separate `paymentUuid` and `debtUuid` values plus
-  bounded value-date, booking-date, counterparty, bank-reference, message,
-  archive-identifier, card, account, cardholder, exchange-rate, merchant-address,
-  merchant-category, payment-type, and attachment projections. Treat null fields
-  as unavailable instead of deriving them.
+  bounded timestamp, value-date, booking-date, direction, status, counterparty,
+  recipient-IBAN, recipient-BIC, typed reference, bank-reference, message,
+  due-date, instant-payment, debt type, debt subtype, archive-identifier, card,
+  account, cardholder, exchange-rate, merchant-address, merchant-category,
+  merchant payment-type, and attachment projections. Treat null fields as
+  unavailable instead of deriving them.
 - `accounts list` returns bounded ledger, available, and blocked balances in the
   payment account currency. Preserve decimal strings for exact calculations.
 - `--from` and `--to` are inclusive `YYYY-MM-DD` calendar dates. With no dates,

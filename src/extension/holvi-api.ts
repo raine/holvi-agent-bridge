@@ -382,13 +382,13 @@ export class HolviApi {
     });
   }
 
-  private async paymentUuidForDebt(
+  private async paymentForDebt(
     auth: Auth,
     debtUuid: string,
-  ): Promise<string | null> {
+  ): Promise<Record<string, unknown> | null> {
     const seenCursors = new Set<string>();
     let cursor = "";
-    let paymentUuid: string | null = null;
+    let matchedPayment: Record<string, unknown> | null = null;
     let pages = 0;
     let results = 0;
 
@@ -406,12 +406,12 @@ export class HolviApi {
       );
       if (
         matches.length > 1 ||
-        (matches.length === 1 && paymentUuid !== null)
+        (matches.length === 1 && matchedPayment !== null)
       ) {
         throw new Error("Holvi returned an ambiguous payment match.");
       }
       if (matches.length === 1) {
-        paymentUuid = asString(matches[0]?.paymentUuid) || null;
+        matchedPayment = matches[0] ?? null;
       }
       if (pages >= this.staticConfig.maxTransactionPages && page.hasMore) {
         throw new Error("The transaction lookup exceeded its page limit.");
@@ -423,7 +423,7 @@ export class HolviApi {
       seenCursors.add(cursor);
     } while (cursor);
 
-    return paymentUuid;
+    return matchedPayment;
   }
 
   async transactionDetails(
@@ -443,8 +443,8 @@ export class HolviApi {
       validUuid,
       paymentAccountUuid,
     );
-    const [paymentUuid, account, card] = await Promise.all([
-      this.paymentUuidForDebt(auth, validUuid),
+    const [payment, account, card] = await Promise.all([
+      this.paymentForDebt(auth, validUuid),
       this.request(auth, this.session.apiRoot()).then((value) =>
         projectTransactionAccount(value, paymentAccountUuid),
       ),
@@ -459,6 +459,7 @@ export class HolviApi {
           )
         : Promise.resolve(null),
     ]);
+    const paymentUuid = asString(payment?.paymentUuid) || null;
     const paymentMetadata = paymentUuid
       ? projectTransactionPaymentMetadata(
           await this.request(auth, this.paymentDetailPath(paymentUuid)),
@@ -469,14 +470,24 @@ export class HolviApi {
       ...preview,
       paymentUuid,
       debtUuid: debt.debtUuid,
+      timestamp: paymentMetadata?.timestamp ?? null,
       valueDate: debt.valueDate ?? paymentMetadata?.valueDate ?? null,
       bookingDate: debt.bookingDate ?? paymentMetadata?.bookingDate ?? null,
+      direction: asString(payment?.direction) || null,
+      status: debt.status ?? (asString(payment?.state) || null),
       counterparty:
         debt.counterparty ??
         paymentMetadata?.counterparty ??
         preview.counterparty,
+      recipientIban: debt.recipientIban,
+      recipientBic: debt.recipientBic,
+      reference: debt.reference ?? paymentMetadata?.reference ?? null,
       bankReference: paymentMetadata?.bankReference ?? null,
       message: paymentMetadata?.message ?? null,
+      dueDate: debt.dueDate,
+      instant: debt.instant,
+      type: debt.type,
+      subtype: debt.subtype,
       archiveIdentifier: debt.archiveIdentifier,
       card,
       account,

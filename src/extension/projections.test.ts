@@ -327,6 +327,12 @@ describe("transaction detail projections", () => {
   const detailDebt = {
     ...debt(),
     currency: "EUR",
+    iban: "FI2112345600000785",
+    bic: "DABAFIHH",
+    fi_reference: "1234561",
+    due_date: "2026-08-05",
+    sctinst_requested: false,
+    status: { value: "paid" },
     links: { card_profile: "55555555-5555-4555-8555-555555555555" },
     creator: { displayname: "Example Cardholder" },
     currency_conversion: {
@@ -357,6 +363,14 @@ describe("transaction detail projections", () => {
       valueDate: null,
       bookingDate: "2026-08-01",
       counterparty: "Example merchant",
+      recipientIban: "FI2112345600000785",
+      recipientBic: "DABAFIHH",
+      reference: { kind: "finnish", value: "1234561" },
+      dueDate: "2026-08-05",
+      instant: false,
+      status: "paid",
+      type: "purchase",
+      subtype: "card_purchase",
       archiveIdentifier: "DEBT-1",
       cardProfileUuid: "55555555-5555-4555-8555-555555555555",
       cardholder: "Example Cardholder",
@@ -393,11 +407,13 @@ describe("transaction detail projections", () => {
         paymentUuid,
       ),
     ).toEqual({
+      timestamp: "2026-08-02T10:15:00Z",
       valueDate: "2026-08-01",
       bookingDate: "2026-08-02",
       counterparty: "Example merchant",
       bankReference: "1234561",
       message: "Invoice 123",
+      reference: { kind: "finnish", value: "1234561" },
     });
     expect(
       projectTransactionPaymentMetadata(

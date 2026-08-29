@@ -59,6 +59,16 @@ function optionalUuid(value: unknown, label: string): string | null {
   return uuid(value, label);
 }
 
+function optionalBoolean(value: unknown, label: string): boolean | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "boolean") {
+    throw new Error(`${label} must be a boolean.`);
+  }
+  return value;
+}
+
 function decimal(value: unknown, label: string): Decimal {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -296,6 +306,14 @@ export interface TransactionDetailDebt {
   valueDate: string | null;
   bookingDate: string | null;
   counterparty: string | null;
+  recipientIban: string | null;
+  recipientBic: string | null;
+  reference: JsonRecord | null;
+  dueDate: string | null;
+  instant: boolean | null;
+  status: string | null;
+  type: string | null;
+  subtype: string | null;
   archiveIdentifier: string | null;
   cardProfileUuid: string | null;
   cardholder: string | null;
@@ -371,6 +389,27 @@ export function projectTransactionDetailDebt(
     links.card_profile,
     "Transaction detail card profile UUID",
   );
+  const status =
+    debt.status && typeof debt.status === "object"
+      ? optionalString(
+          record(debt.status, "Transaction status").value,
+          "Transaction status",
+        )
+      : optionalString(debt.status ?? debt.state, "Transaction status");
+  const referenceFields: Array<[string, unknown]> = [
+    ["finnish", debt.fi_reference],
+    ["rf", debt.rf_reference],
+    ["message", debt.unstructured_reference],
+  ];
+  const referenceCandidates = referenceFields
+    .map(([kind, value]) => ({
+      kind,
+      value: optionalString(value, `Transaction ${kind} reference`),
+    }))
+    .filter((candidate) => candidate.value !== null);
+  if (referenceCandidates.length > 1) {
+    throw new Error("Transaction has ambiguous payment references.");
+  }
 
   return projection({
     debtUuid: requestedUuid,
@@ -381,6 +420,14 @@ export function projectTransactionDetailDebt(
       debt.counterparty_name,
       "Transaction counterparty",
     ),
+    recipientIban: optionalString(debt.iban, "Transaction recipient IBAN"),
+    recipientBic: optionalString(debt.bic, "Transaction recipient BIC"),
+    reference: referenceCandidates[0] ?? null,
+    dueDate: optionalDate(debt.due_date, "Transaction due date"),
+    instant: optionalBoolean(debt.sctinst_requested, "Instant payment flag"),
+    status,
+    type: optionalString(debt.type, "Transaction type"),
+    subtype: optionalString(debt.subtype, "Transaction subtype"),
     archiveIdentifier: optionalString(debt.code, "Holvi archive identifier"),
     cardProfileUuid,
     cardholder: cardProfileUuid
@@ -477,11 +524,13 @@ export function projectTransactionCard(
 }
 
 export interface TransactionPaymentMetadata {
+  timestamp: string;
   valueDate: string | null;
   bookingDate: string | null;
   counterparty: string | null;
   bankReference: string | null;
   message: string | null;
+  reference: JsonRecord | null;
 }
 
 export function projectTransactionPaymentMetadata(
@@ -500,30 +549,46 @@ export function projectTransactionPaymentMetadata(
     payment.counterparty,
     "Transaction payment counterparty",
   );
+  const paymentTimestamp = timestamp(
+    payment.ux_timestamp,
+    "Transaction payment timestamp",
+  );
   const bookingDate = optionalDate(
-    payment.booking_date ?? payment.ux_timestamp,
+    payment.booking_date ?? paymentTimestamp,
     "Transaction booking date",
   );
   const valueDate = optionalDate(
-    payment.value_date ?? payment.ux_timestamp,
+    payment.value_date ?? paymentTimestamp,
     "Transaction value date",
   );
+  const bankReference = optionalString(
+    payment.structured_reference,
+    "Transaction bank reference",
+  );
+  const message = optionalString(
+    payment.unstructured_reference,
+    "Transaction payment message",
+  );
+  const reference = bankReference
+    ? {
+        kind: /^RF/i.test(bankReference) ? "rf" : "finnish",
+        value: bankReference,
+      }
+    : message
+      ? { kind: "message", value: message }
+      : null;
 
   return projection({
+    timestamp: paymentTimestamp,
     valueDate,
     bookingDate,
     counterparty: optionalString(
       counterparty.display_name,
       "Transaction payment counterparty name",
     ),
-    bankReference: optionalString(
-      payment.structured_reference,
-      "Transaction bank reference",
-    ),
-    message: optionalString(
-      payment.unstructured_reference,
-      "Transaction payment message",
-    ),
+    bankReference,
+    message,
+    reference,
   });
 }
 
