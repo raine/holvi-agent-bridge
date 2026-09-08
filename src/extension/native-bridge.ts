@@ -62,6 +62,7 @@ export class NativeBridge {
     private readonly commands: CommandService,
     private readonly uploads: UploadWorkflow,
     private readonly api?: HolviApi,
+    private readonly onActivity: () => void = () => {},
   ) {}
 
   connect(): void {
@@ -269,6 +270,7 @@ export class NativeBridge {
     const id = message.id as string;
 
     if (message.type === nativeMessageType.command) {
+      this.onActivity();
       if (
         [
           "attachments.download",
@@ -303,6 +305,7 @@ export class NativeBridge {
           this.session.optionalConfig?.maxFileBytes || 0,
           Date.now(),
         );
+        this.onActivity();
         this.scheduleUploadExpiry();
       } catch (error) {
         this.postResult(id, false, error);

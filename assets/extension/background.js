@@ -2853,17 +2853,19 @@
     commands;
     uploads;
     api;
+    onActivity;
     nativePort = null;
     reconnectTimer = null;
     uploadExpiryTimer = null;
     uploadTransfers = new UploadTransferLifecycle;
-    constructor(staticConfig, session, tabs, commands, uploads, api) {
+    constructor(staticConfig, session, tabs, commands, uploads, api, onActivity = () => {}) {
       this.staticConfig = staticConfig;
       this.session = session;
       this.tabs = tabs;
       this.commands = commands;
       this.uploads = uploads;
       this.api = api;
+      this.onActivity = onActivity;
     }
     connect() {
       if (this.nativePort || this.tabs.size === 0) {
@@ -3030,6 +3032,7 @@
       }
       const id = message.id;
       if (message.type === nativeMessageType.command) {
+        this.onActivity();
         if ([
           "attachments.download",
           "reports.export",
@@ -3052,6 +3055,7 @@
             sha256: message.sha256,
             chunkCount: message.chunkCount
           }, this.session.optionalConfig?.maxFileBytes || 0, Date.now());
+          this.onActivity();
           this.scheduleUploadExpiry();
         } catch (error) {
           this.postResult(id, false, error);
@@ -3082,6 +3086,64 @@
           return;
         }
         this.finishUpload(upload).then((data) => this.postResult(id, true, data)).catch((error) => this.postResult(id, false, error)).finally(() => this.uploadTransfers.finish(id));
+      }
+    }
+  }
+
+  // src/extension/session-heartbeat.ts
+  async function pageHeartbeat(origin, group) {
+    const inScope = (url) => {
+      const match = url.pathname.match(/^\/group\/([^/]+)(?:\/|$)/);
+      try {
+        return url.origin === origin && !!match?.[1] && decodeURIComponent(match[1]) === group;
+      } catch {
+        return false;
+      }
+    };
+    if (!inScope(new URL(window.location.href)))
+      return;
+    const target = document.documentElement || document;
+    const options = { bubbles: true, clientX: 1, clientY: 1, view: window };
+    if (typeof window.PointerEvent === "function") {
+      target.dispatchEvent(new PointerEvent("pointermove", options));
+    }
+    target.dispatchEvent(new MouseEvent("mousemove", options));
+    try {
+      await fetch(window.location.href, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+        redirect: "error",
+        headers: { Accept: "text/html,application/xhtml+xml" },
+        signal: AbortSignal.timeout(15000)
+      });
+    } catch {}
+  }
+  var heartbeatAlarm = "holvi-session-heartbeat";
+
+  class SessionHeartbeat {
+    target;
+    execute;
+    now;
+    running = false;
+    enabledUntil = 0;
+    constructor(target, execute, now = Date.now) {
+      this.target = target;
+      this.execute = execute;
+      this.now = now;
+    }
+    recordActivity() {
+      this.enabledUntil = this.now() + 30 * 60 * 1000;
+    }
+    async run() {
+      const target = this.target();
+      if (!target || this.running || this.now() >= this.enabledUntil)
+        return;
+      this.running = true;
+      try {
+        await this.execute(target.tabId, target.origin, target.group);
+      } catch {} finally {
+        this.running = false;
       }
     }
   }
@@ -3315,6 +3377,28 @@
   });
   var commands = new CommandService(session, api, () => tabs.requestAuth());
   var uploads = new UploadWorkflow(session, api);
-  nativeBridge = new NativeBridge(staticConfig, session, tabs, commands, uploads, api);
+  nativeBridge = new NativeBridge(staticConfig, session, tabs, commands, uploads, api, () => heartbeat.recordActivity());
   chrome.runtime.onConnect.addListener((port) => tabs.register(port));
+  var heartbeat = new SessionHeartbeat(() => {
+    const tab = tabs.configuredTab();
+    const config = session.optionalConfig;
+    return tab && config ? {
+      tabId: tab[0],
+      origin: staticConfig.accountOrigin,
+      group: config.groupPathSegment
+    } : null;
+  }, (tabId, origin, group) => chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: pageHeartbeat,
+    args: [origin, group]
+  }));
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === heartbeatAlarm)
+      heartbeat.run();
+  });
+  chrome.alarms.create(heartbeatAlarm, {
+    delayInMinutes: 2,
+    periodInMinutes: 2
+  });
 })();

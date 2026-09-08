@@ -265,8 +265,15 @@ Use `holvi config edit` to open the private configuration in your editor.
 
 ## Related projects
 
-[Holvi Session Keeper](https://github.com/raine/holvi-session-keeper) can keep
-an explicitly enabled Holvi session active during longer agent workflows.
+The bridge automatically sends activity events and a read-only page request every
+two minutes while connected to the configured Holvi company tab. Keep that tab
+open during longer agent workflows. Closing the tab or disabling the extension
+stops refreshes. Agent commands (including receipt uploads) enable refreshes for
+30 minutes from the latest command. Opening a tab or sending a heartbeat does
+not extend this window. After it expires, Holvi can log out normally; the bridge
+does not force logout. Restarting the extension also resets the window.
+Refreshes cannot prevent server-enforced expiry or sign you back in.
+Holvi Session Keeper is not required.
 
 For companies using Lemonaid, see
 [Lemonaid Agent Bridge](https://github.com/raine/lemonaid-agent-bridge).
