@@ -3,6 +3,13 @@ title: Changelog
 description: Release notes for Holvi Agent Bridge.
 ---
 
+## v0.1.6 (2026-09-08)
+
+- Reduce idle logouts during agent workflows by keeping the configured Holvi tab
+  active for up to 30 minutes after the latest command or receipt upload, then
+  allowing normal session expiry. Keep the tab open; expired sessions still
+  require signing in again.
+
 ## v0.1.5 (2026-08-29)
 
 - Include exact payment timing, direction, status, recipient bank details,
