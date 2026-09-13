@@ -81,25 +81,88 @@ instructions without installing them, or select one integration explicitly:
 holvi skill install --agent claude
 ```
 
+### Example: Monthly receipt collection
+
+```text
+╭─ User ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  Let's get the receipts ready for August 2026 @Holvi receipt workflow.md                                            │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ● Multiple Tools: 8 done • Find, Read×3, Bash×4 • ctrl+o to toggle
+ ├ ● Find "**/*Holvi*"
+ ├ ● Read Holvi receipt workflow.md
+ ├ ● Read history/2026-07-23 Holvi June receipts automation.md
+ ├ ● Bash holvi skill                                                                                              <1s
+ ├ ● Bash holvi capabilities                                                                                       <1s
+ ├ ● Bash find '/Users/raine/Documents/Freelancing/Kuitit' -maxdepth 2 -type f -print | sort | tail -n 200         <1s
+ ├ ● Read Holvi monthly results.md
+ └ ● Bash holvi transactions list --from 2026-08-01 --to 2026-08-31 --json > /tmp/holvi-aug-2026.json && cat /tmp…  3s
+
+ ● Multiple Tools: 9 done • 2 failed • Bash×10, Read • ctrl+o to toggle
+ ├ ● Bash for f in '/Users/raine/Documents/Freelancing/Kuitit/'*2026-08* '/Users/raine/Documents/Freelancing/Kui…  15s
+ ├ ● Bash find '/Users/raine/Documents/Freelancing' -type f \( -iname '*.pdf' -o -iname '*.png' -o -iname '*.jpg…  <1s
+ ├ ● Bash holvi bookkeeping get --debt 00000000-0000-4000-8000-000000000001 --json && printf '\n--- private outg…  <1s
+ ├ ● Bash holvi transactions list --from 2026-07-17 --to 2026-07-17 --json                                          3s
+ ├ ● Bash holvi transactions get --debt 00000000-0000-4000-8000-000000000002 --json && printf '\n--- cursor ---\…  <1s
+ ├ ● Bash find '/Users/raine/Documents/Freelancing/Kuitit' -maxdepth 1 -type f \( -iname '*Hetzner*' -o -iname '…  <1s
+ ├ ● Bash pdftotext '/Users/raine/Documents/Freelancing/Kuitit/2026-08-20 Taxi 18.50 EUR.pdf' - | tail -n 30 && …  <1s
+ ├ ● Bash holvi bookkeeping get --debt 00000000-0000-4000-8000-000000000003 --json                                 <1s
+ └ ● Bash for d in 00000000-0000-4000-8000-000000000004 00000000-0000-4000-8000-000000000005 00000000-0000-4000-…  <1s
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ● Bash for d in 00000000-0000-4000-8000-000000000006 00000000-0000-4000-8000-000000000001 00000000-0000-4000-800…  9s
+ └ Done (126 lines) • ctrl+o to toggle
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ ● I scanned August 2026. Five matching receipts already exist locally and are ready to attach:
+
+   ┌────────────────────────────────┬──────────────────────────────────────────┬──────────────────────────────────────┐
+   │ Transaction                    │ Receipt                                  │ Debt UUID                            │
+   ├────────────────────────────────┼──────────────────────────────────────────┼──────────────────────────────────────┤
+   │ Domain provider, 24.00 EUR     │ 2026-08-28 Domain provider 24.00 EUR.pdf │ 00000000-0000-4000-8000-000000000004 │
+   ├────────────────────────────────┼──────────────────────────────────────────┼──────────────────────────────────────┤
+   │ Taxi, 18.50 EUR                │ 2026-08-20 Taxi 18.50 EUR.pdf            │ 00000000-0000-4000-8000-000000000005 │
+   ├────────────────────────────────┼──────────────────────────────────────────┼──────────────────────────────────────┤
+   │ Bistro, 29.00 EUR              │ 2026-08-20 Example Bistro 29.00 EUR.pdf  │ 00000000-0000-4000-8000-000000000007 │
+   ├────────────────────────────────┼──────────────────────────────────────────┼──────────────────────────────────────┤
+   │ Market, 16.80 EUR              │ 2026-08-17 MARKET 16.80 EUR.pdf          │ 00000000-0000-4000-8000-000000000008 │
+   ├────────────────────────────────┼──────────────────────────────────────────┼──────────────────────────────────────┤
+   │ Anthropic, 125.50 USD          │ 2026-08-16 Anthropic 125.50 USD.pdf      │ 00000000-0000-4000-8000-000000000009 │
+   └────────────────────────────────┴──────────────────────────────────────────┴──────────────────────────────────────┘
+
+   Please:
+
+   1. Confirm that I may dry-run and then upload these five mappings.
+   2. Ensure these sites are logged in in Chrome: Google Payments, Google Cloud, Hetzner, ChatGPT, Cursor, xAI/Grok,
+      Wise, and Lemonaid.
+   3. Tell me whether the 7.99 EUR VideoCo charge was a private purchase or a business expense. If business, also log
+      in to PayPal.
+   4. Provide exact Kuvaus wording for:
+       ◉ Taxi
+       ◉ Bistro
+       ◉ Market
+ ✻ Turn took 1m 51s (Total time 14m 32s · 5 turns)
+```
+
 ## Capabilities
 
 Each operation requires its capability to be enabled during setup.
 
-| Capability | Allows |
-| --- | --- |
-| `transactions.read` | List and inspect transactions and comments |
-| `accounts.read` | List company payment accounts and balances |
-| `bookkeeping.read` | Read bookkeeping documents, categories, and suggestions |
-| `audit.read` | Read historical company activity |
-| `reports.read` | List and download reports into approved export folders |
-| `attachments.read` | Download debt attachments into approved export folders |
-| `comments.write` | Create internal transaction comments |
-| `attachments.write` | Upload receipts from approved receipt folders |
-| `attachments.delete` | Delete one selected attachment |
-| `bookkeeping.write` | Replace one bookkeeping line-item description |
-| `reports.generate` | Create asynchronous report jobs |
-| `payments.write` | Preview and create one-off EUR payment drafts |
-| `payments.send` | Review and confirm payment drafts through mobile-app 2FA |
+| Capability           | Allows                                                   |
+| -------------------- | -------------------------------------------------------- |
+| `transactions.read`  | List and inspect transactions and comments               |
+| `accounts.read`      | List company payment accounts and balances               |
+| `bookkeeping.read`   | Read bookkeeping documents, categories, and suggestions  |
+| `audit.read`         | Read historical company activity                         |
+| `reports.read`       | List and download reports into approved export folders   |
+| `attachments.read`   | Download debt attachments into approved export folders   |
+| `comments.write`     | Create internal transaction comments                     |
+| `attachments.write`  | Upload receipts from approved receipt folders            |
+| `attachments.delete` | Delete one selected attachment                           |
+| `bookkeeping.write`  | Replace one bookkeeping line-item description            |
+| `reports.generate`   | Create asynchronous report jobs                          |
+| `payments.write`     | Preview and create one-off EUR payment drafts            |
+| `payments.send`      | Review and confirm payment drafts through mobile-app 2FA |
 
 Some operations combine capabilities. For example, attachment uploads and
 comments also require `transactions.read`, while attachment downloads require
@@ -136,16 +199,16 @@ full path, media type, size, and checksum response is needed.
 
 ## Common commands
 
-| Task | Command |
-| --- | --- |
-| Payment accounts and balances | `holvi accounts list` |
-| Transactions | `holvi transactions list` or `get` |
-| Internal comments | `holvi transactions comments list` or `create` |
-| Bookkeeping | `holvi bookkeeping list`, `get`, `categories`, or `suggestions` |
-| Historical activity | `holvi audit types` or `list` |
-| Reports | `holvi reports types`, `export`, or `jobs` |
-| Attachments | `holvi attachments upload`, `download`, or `delete` |
-| Outgoing payments | `holvi payments create` or `send` |
+| Task                          | Command                                                         |
+| ----------------------------- | --------------------------------------------------------------- |
+| Payment accounts and balances | `holvi accounts list`                                           |
+| Transactions                  | `holvi transactions list` or `get`                              |
+| Internal comments             | `holvi transactions comments list` or `create`                  |
+| Bookkeeping                   | `holvi bookkeeping list`, `get`, `categories`, or `suggestions` |
+| Historical activity           | `holvi audit types` or `list`                                   |
+| Reports                       | `holvi reports types`, `export`, or `jobs`                      |
+| Attachments                   | `holvi attachments upload`, `download`, or `delete`             |
+| Outgoing payments             | `holvi payments create` or `send`                               |
 
 For example:
 
@@ -158,8 +221,8 @@ holvi transactions get --debt DEBT_UUID --json
 Date ranges are inclusive and use `YYYY-MM-DD`. Use debt, item, attachment, and
 report IDs returned by Holvi commands instead of inventing them.
 
-Run `holvi --help` or `holvi <command> --help` for all commands, accepted values,
-and options.
+Run `holvi --help` or `holvi <command> --help` for all commands, accepted
+values, and options.
 
 ## Writes and dry runs
 
@@ -241,14 +304,14 @@ bridge verifies each file and refuses to replace an existing file.
 
 ## Troubleshooting
 
-| Problem | What to do |
-| --- | --- |
-| Chrome connection is unavailable | Open and reload the signed-in Holvi company tab |
+| Problem                                | What to do                                                              |
+| -------------------------------------- | ----------------------------------------------------------------------- |
+| Chrome connection is unavailable       | Open and reload the signed-in Holvi company tab                         |
 | The wrong company or account is active | Check the configured group and payment account, then run `holvi doctor` |
-| A capability is missing | Run `holvi install` and enable it |
-| An upload is rejected | Use a supported file under an approved receipt folder |
-| A download is rejected | Use an existing directory under an approved export folder |
-| The extension does not connect | Reload the unpacked extension and the Holvi tab |
+| A capability is missing                | Run `holvi install` and enable it                                       |
+| An upload is rejected                  | Use a supported file under an approved receipt folder                   |
+| A download is rejected                 | Use an existing directory under an approved export folder               |
+| The extension does not connect         | Reload the unpacked extension and the Holvi tab                         |
 
 Use `holvi config edit` to open the private configuration in your editor.
 
@@ -265,14 +328,14 @@ Use `holvi config edit` to open the private configuration in your editor.
 
 ## Related projects
 
-The bridge automatically sends activity events and a read-only page request every
-two minutes while connected to the configured Holvi company tab. Keep that tab
-open during longer agent workflows. Closing the tab or disabling the extension
-stops refreshes. Agent commands (including receipt uploads) enable refreshes for
-30 minutes from the latest command. Opening a tab or sending a heartbeat does
-not extend this window. After it expires, Holvi can log out normally; the bridge
-does not force logout. Restarting the extension also resets the window.
-Refreshes cannot prevent server-enforced expiry or sign you back in.
+The bridge automatically sends activity events and a read-only page request
+every two minutes while connected to the configured Holvi company tab. Keep that
+tab open during longer agent workflows. Closing the tab or disabling the
+extension stops refreshes. Agent commands (including receipt uploads) enable
+refreshes for 30 minutes from the latest command. Opening a tab or sending a
+heartbeat does not extend this window. After it expires, Holvi can log out
+normally; the bridge does not force logout. Restarting the extension also resets
+the window. Refreshes cannot prevent server-enforced expiry or sign you back in.
 Holvi Session Keeper is not required.
 
 For companies using Lemonaid, see
