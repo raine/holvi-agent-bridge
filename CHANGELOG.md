@@ -3,6 +3,11 @@ title: Changelog
 description: Release notes for Holvi Agent Bridge.
 ---
 
+## Unreleased
+
+- Preview and set bookkeeping line-item descriptions when the existing
+  description is empty or unset.
+
 ## v0.1.6 (2026-09-08)
 
 - Reduce idle logouts during agent workflows by keeping the configured Holvi tab
