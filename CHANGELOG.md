@@ -3,9 +3,9 @@ title: Changelog
 description: Release notes for Holvi Agent Bridge.
 ---
 
-## Unreleased
+## v0.1.7 (2026-09-13)
 
-- Preview and set bookkeeping line-item descriptions when the existing
+- Fix: Preview and set bookkeeping line-item descriptions when the existing
   description is empty or unset.
 
 ## v0.1.6 (2026-09-08)
