@@ -1082,6 +1082,18 @@
     }
     return value;
   }
+  function existingDescription(value, label) {
+    if (value === null || value === undefined) {
+      return "";
+    }
+    if (typeof value !== "string") {
+      throw new Error(`${label} must be a string.`);
+    }
+    if (new TextEncoder().encode(value).byteLength > bookkeepingDescriptionMaxBytes) {
+      throw new Error(`${label} must be at most 4096 bytes.`);
+    }
+    return value;
+  }
   function sameUuid(left, right) {
     return left.toLowerCase() === right.toLowerCase();
   }
@@ -1131,7 +1143,7 @@
         matchingItems.push(item);
       }
       if (item.type === "line_item" && item.active) {
-        boundedDescription(item.description, `Bookkeeping item ${index + 1} description`);
+        existingDescription(item.description, `Bookkeeping item ${index + 1} description`);
         items.push(item);
       }
     }
@@ -1142,7 +1154,7 @@
     if (targetIndex < 0) {
       throw new Error("The matching bookkeeping item is not an active line item.");
     }
-    const currentDescription = boundedDescription(items[targetIndex].description, "Current bookkeeping description");
+    const currentDescription = existingDescription(items[targetIndex].description, "Current bookkeeping description");
     return { debt, items, targetIndex, currentDescription };
   }
   function verifyCriticalDebtFields(before, after) {

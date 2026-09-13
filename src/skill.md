@@ -303,6 +303,10 @@ this sequence:
 
 - The bridge requires `bookkeeping.write` for the dry run and confirmed write.
   Do not use `bookkeeping.read` or another access path as a substitute.
+- A null or absent stored description reads as an empty string in
+  `currentDescription` and can be replaced normally.
+- Stored descriptions with an invalid type or exceeding 4096 bytes are rejected
+  as integrity errors.
 - A confirmed command performs one write and never retries a failed or ambiguous
   result. Surface the error and inspect the debt before any separate attempt.
 - Success means the post-write read verified the exact description, sibling

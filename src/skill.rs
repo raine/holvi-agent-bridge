@@ -187,6 +187,7 @@ mod tests {
         assert!(SKILL_BODY.contains("post-delete debt read"));
         assert!(SKILL_BODY.contains("bookkeeping.write"));
         assert!(SKILL_BODY.contains("bookkeeping set-description"));
+        assert!(SKILL_BODY.contains("reads as an empty string"));
         assert!(SKILL_BODY.contains("never retries"));
         assert!(SKILL_BODY.contains("named operations"));
     }

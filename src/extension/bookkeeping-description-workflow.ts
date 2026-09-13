@@ -57,6 +57,21 @@ function boundedDescription(value: unknown, label: string): string {
   return value;
 }
 
+function existingDescription(value: unknown, label: string): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be a string.`);
+  }
+  if (
+    new TextEncoder().encode(value).byteLength > bookkeepingDescriptionMaxBytes
+  ) {
+    throw new Error(`${label} must be at most 4096 bytes.`);
+  }
+  return value;
+}
+
 function sameUuid(left: string, right: string): boolean {
   return left.toLowerCase() === right.toLowerCase();
 }
@@ -127,7 +142,7 @@ function parseSnapshot(
       matchingItems.push(item);
     }
     if (item.type === "line_item" && item.active) {
-      boundedDescription(
+      existingDescription(
         item.description,
         `Bookkeeping item ${index + 1} description`,
       );
@@ -145,7 +160,7 @@ function parseSnapshot(
       "The matching bookkeeping item is not an active line item.",
     );
   }
-  const currentDescription = boundedDescription(
+  const currentDescription = existingDescription(
     items[targetIndex]!.description,
     "Current bookkeeping description",
   );

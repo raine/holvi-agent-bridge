@@ -1406,6 +1406,7 @@ mod tests {
             Kind::PaymentsCreate => payment(&mut report, value, false),
             Kind::PaymentsSend => payment(&mut report, value, true),
             Kind::TransactionsGet => transactions_get(&mut report, value),
+            Kind::BookkeepingSetDescription => bookkeeping_description(&mut report, value),
             _ => panic!("test helper does not cover this kind"),
         }
         report.finish()
@@ -1440,6 +1441,25 @@ mod tests {
             assert!(output.contains(kind.title()), "missing title for {kind:?}");
             assert!(!output.contains('{'), "raw object output for {kind:?}");
         }
+    }
+
+    #[test]
+    fn empty_current_description_renders_an_explicit_empty_state() {
+        let output = plain(
+            Kind::BookkeepingSetDescription,
+            &json!({
+                "debtUuid": "11111111-1111-4111-8111-111111111111",
+                "itemUuid": "33333333-3333-4333-8333-333333333333",
+                "currentDescription": "",
+                "proposedDescription": "Replacement",
+                "dryRun": true,
+                "writePerformed": false,
+                "next": "Repeat the command with --yes after checking these descriptions."
+            }),
+        );
+        assert!(output.contains("Current"));
+        assert!(output.contains("(empty)"));
+        assert!(output.contains("Replacement"));
     }
 
     #[test]

@@ -89,6 +89,28 @@ function debt(description = "Original") {
   };
 }
 
+function customDebt(
+  entries: Array<{ index: number; description?: unknown; omit?: boolean }>,
+): Record<string, unknown> {
+  const fixture = debt() as Record<string, unknown>;
+  const items = (fixture.items as Array<Record<string, unknown>>).map(
+    (item, index) => {
+      const entry = entries.find((candidate) => candidate.index === index);
+      if (!entry) {
+        return item;
+      }
+      const next = { ...item };
+      if (entry.omit) {
+        delete next.description;
+      } else {
+        next.description = entry.description;
+      }
+      return next;
+    },
+  );
+  return { ...fixture, items };
+}
+
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
@@ -212,6 +234,168 @@ describe("bookkeeping description workflow", () => {
       writePerformed: true,
       verified: true,
     });
+  });
+
+  test("reports null and absent current descriptions as empty strings", async () => {
+    const fixtures = [
+      customDebt([{ index: 0, description: null }]),
+      customDebt([{ index: 0, omit: true }]),
+    ];
+    for (const fixture of fixtures) {
+      const methods: Array<string | undefined> = [];
+      const workflow = setup(async (_input, init = {}) => {
+        methods.push(init.method);
+        return jsonResponse(fixture);
+      });
+
+      await expect(workflow.change(auth, change(false))).resolves.toEqual({
+        debtUuid,
+        itemUuid: targetUuid,
+        currentDescription: "",
+        proposedDescription: "Replacement",
+        dryRun: true,
+        writePerformed: false,
+        next: "Repeat the command with --yes after checking these descriptions.",
+      });
+      expect(methods).toEqual([undefined]);
+    }
+  });
+
+  test("tolerates null and absent descriptions on active siblings", async () => {
+    for (const fixture of [
+      customDebt([{ index: 1, description: null }]),
+      customDebt([{ index: 1, omit: true }]),
+    ]) {
+      const methods: Array<string | undefined> = [];
+      const workflow = setup(async (_input, init = {}) => {
+        methods.push(init.method);
+        return jsonResponse(fixture);
+      });
+      await expect(workflow.change(auth, change(false))).resolves.toMatchObject(
+        {
+          currentDescription: "Original",
+          dryRun: true,
+        },
+      );
+      expect(methods).toEqual([undefined]);
+    }
+  });
+
+  test("confirms one write across null and absent description variants", async () => {
+    const targetVariants: Array<
+      Array<{ index: number; description?: unknown; omit?: boolean }>
+    > = [[{ index: 0, description: null }], [{ index: 0, omit: true }]];
+    const siblingVariants: Array<
+      Array<{ index: number; description?: unknown; omit?: boolean }>
+    > = [[{ index: 1, description: null }], [{ index: 1, omit: true }]];
+
+    for (const target of targetVariants) {
+      for (const sibling of siblingVariants) {
+        const before = customDebt([...target, ...sibling]);
+        const after = customDebt([
+          { index: 0, description: "Replacement" },
+          ...sibling,
+        ]);
+        const calls: Array<{ url: string; init: RequestInit }> = [];
+        const responses = [
+          jsonResponse(before),
+          jsonResponse({}),
+          jsonResponse(after),
+        ];
+        const workflow = setup(async (input, init = {}) => {
+          calls.push({ url: requestUrl(input), init });
+          return responses.shift()!;
+        });
+
+        await expect(workflow.change(auth, change(true))).resolves.toEqual({
+          debtUuid,
+          itemUuid: targetUuid,
+          currentDescription: "",
+          proposedDescription: "Replacement",
+          dryRun: false,
+          writePerformed: true,
+          verified: true,
+        });
+
+        const writes = calls.filter((call) => call.init.method === "PATCH");
+        expect(writes).toHaveLength(1);
+        const payload = JSON.parse(writes[0]!.init.body as string);
+        const rawItems = before.items as Array<Record<string, unknown>>;
+        const expectedItems = [
+          { ...rawItems[0], description: "Replacement" },
+          rawItems[1],
+        ];
+        expect(payload).toEqual({ items: expectedItems });
+      }
+    }
+  });
+
+  test("rejects oversized proposed descriptions before reading", async () => {
+    let fetchCount = 0;
+    const workflow = setup(async () => {
+      fetchCount += 1;
+      return jsonResponse(debt());
+    });
+
+    await expect(
+      workflow.change(auth, change(false, "x".repeat(4097))),
+    ).rejects.toThrow("Bookkeeping description must be at most 4096 bytes.");
+    expect(fetchCount).toBe(0);
+  });
+
+  test("measures the proposal limit in bytes", async () => {
+    const accepted = "x".repeat(4096);
+    const oversized = "€".repeat(1366);
+    expect(new TextEncoder().encode(oversized).byteLength).toBe(4098);
+
+    const workflow = setup(async () => jsonResponse(debt()));
+    await expect(
+      workflow.change(auth, change(false, accepted)),
+    ).resolves.toMatchObject({ proposedDescription: accepted, dryRun: true });
+    await expect(
+      workflow.change(auth, change(false, oversized)),
+    ).rejects.toThrow("Bookkeeping description must be at most 4096 bytes.");
+  });
+
+  test("rejects malformed current descriptions with an accurate error", async () => {
+    const malformed: Array<{ index: number; label: string }> = [
+      { index: 0, label: "Bookkeeping item 1" },
+      { index: 1, label: "Bookkeeping item 2" },
+    ];
+    for (const { index, label } of malformed) {
+      for (const value of [123, { text: "nested" }, ["array"]]) {
+        const methods: Array<string | undefined> = [];
+        const workflow = setup(async (_input, init = {}) => {
+          methods.push(init.method);
+          return jsonResponse(customDebt([{ index, description: value }]));
+        });
+
+        let message = "";
+        try {
+          await workflow.change(auth, change(true));
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+        expect(message).toContain(`${label} description must be a string.`);
+        expect(message).not.toContain("4096");
+        expect(methods).toEqual([undefined]);
+      }
+    }
+  });
+
+  test("rejects oversized current descriptions with a byte-length error", async () => {
+    let fetchCount = 0;
+    const workflow = setup(async () => {
+      fetchCount += 1;
+      return jsonResponse(
+        customDebt([{ index: 0, description: "x".repeat(4097) }]),
+      );
+    });
+
+    await expect(workflow.change(auth, change(false))).rejects.toThrow(
+      "Bookkeeping item 1 description must be at most 4096 bytes.",
+    );
+    expect(fetchCount).toBe(1);
   });
 
   test("reports changed target field paths without their values", async () => {
